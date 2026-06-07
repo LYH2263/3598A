@@ -148,6 +148,117 @@ class LedgerService:
         return order
 
     @staticmethod
+    def _review_single_order(order_id: int, action: str, reviewer, review_remark: str) -> dict:
+        try:
+            with transaction.atomic():
+                order = RechargeOrder.objects.select_for_update().select_related('user', 'user__wallet').filter(id=order_id).first()
+                if not order:
+                    return {
+                        'order_id': order_id,
+                        'order_no': '',
+                        'success': False,
+                        'reason': '充值订单不存在。',
+                    }
+
+                order_no = order.order_no
+
+                if order.status != RechargeOrder.STATUS_PENDING:
+                    status_label = dict(RechargeOrder.STATUS_CHOICES).get(order.status, order.status)
+                    return {
+                        'order_id': order_id,
+                        'order_no': order_no,
+                        'success': False,
+                        'reason': f'该订单状态为「{status_label}」，已处理，请勿重复审核。',
+                    }
+
+                if action not in {RechargeOrder.STATUS_APPROVED, RechargeOrder.STATUS_REJECTED}:
+                    return {
+                        'order_id': order_id,
+                        'order_no': order_no,
+                        'success': False,
+                        'reason': '非法审核动作。',
+                    }
+
+                if action == RechargeOrder.STATUS_APPROVED:
+                    wallet = getattr(order.user, 'wallet', None)
+                    if wallet and wallet.is_frozen:
+                        frozen_reason = wallet.frozen_reason or '未填写原因'
+                        return {
+                            'order_id': order_id,
+                            'order_no': order_no,
+                            'success': False,
+                            'reason': f'对应用户账户已冻结（{frozen_reason}），无法入账。',
+                        }
+
+                    LedgerService.create_recharge(
+                        user=order.user,
+                        amount=order.amount,
+                        channel=order.channel,
+                        operator=reviewer.username,
+                        remark=review_remark or '管理员审核通过充值订单',
+                        order=order,
+                    )
+                    order.status = RechargeOrder.STATUS_APPROVED
+                    notify_title = '充值订单审核通过'
+                    notify_content = f'订单 {order.order_no} 已审核通过，金额 ¥{order.amount} 已入账。'
+                else:
+                    order.status = RechargeOrder.STATUS_REJECTED
+                    notify_title = '充值订单被驳回'
+                    notify_content = f'订单 {order.order_no} 已被驳回，请联系管理员。'
+
+                order.reviewer = reviewer
+                order.review_remark = review_remark
+                order.reviewed_at = timezone.now()
+                order.save(update_fields=['status', 'reviewer', 'review_remark', 'reviewed_at', 'updated_at'])
+
+                NotificationService.create_user_notification(
+                    user=order.user,
+                    title=notify_title,
+                    content=notify_content,
+                    notice_type='order',
+                )
+
+                return {
+                    'order_id': order_id,
+                    'order_no': order_no,
+                    'success': True,
+                    'reason': '',
+                }
+        except ValidationError as e:
+            msg = e.detail[0] if isinstance(e.detail, list) else str(e.detail)
+            return {
+                'order_id': order_id,
+                'order_no': '',
+                'success': False,
+                'reason': msg,
+            }
+        except Exception as e:
+            return {
+                'order_id': order_id,
+                'order_no': '',
+                'success': False,
+                'reason': f'系统异常：{str(e)}',
+            }
+
+    @staticmethod
+    def batch_review_recharge_orders(order_ids: list[int], action: str, reviewer, review_remark: str = '') -> dict:
+        results = []
+        for order_id in order_ids:
+            result = LedgerService._review_single_order(order_id, action, reviewer, review_remark)
+            results.append(result)
+
+        success_count = sum(1 for r in results if r['success'])
+        failure_count = len(results) - success_count
+
+        return {
+            'total': len(results),
+            'success_count': success_count,
+            'failure_count': failure_count,
+            'action': action,
+            'results': results,
+        }
+
+    @staticmethod
     @transaction.atomic
     def freeze_wallet(user, operator: str, reason: str = '') -> Wallet:
         wallet, _ = Wallet.objects.select_for_update().get_or_create(user=user)

@@ -33,6 +33,75 @@ const orderFilters = reactive({
 })
 
 const orders = ref([])
+const selectedOrders = ref([])
+const batchReviewVisible = ref(false)
+const batchReviewAction = ref('approved')
+const batchReviewRemark = ref('')
+const batchReviewLoading = ref(false)
+const batchReviewResult = ref(null)
+
+const MAX_BATCH_SIZE = 50
+
+const pendingSelectedOrders = computed(() =>
+  selectedOrders.value.filter((o) => o.status === 'pending')
+)
+
+function handleSelectionChange(selection) {
+  selectedOrders.value = selection
+}
+
+function toggleSelectAllPending() {
+  const table = document.querySelector('.orders-table .el-checkbox')
+  if (table) {
+    const pendingOrders = orders.value.filter((o) => o.status === 'pending')
+    if (pendingSelectedOrders.value.length === pendingOrders.length) {
+      selectedOrders.value = []
+    } else {
+      selectedOrders.value = pendingOrders
+    }
+  }
+}
+
+function openBatchReview(action) {
+  if (pendingSelectedOrders.value.length === 0) {
+    ElNotification({ title: '请选择订单', message: '请先勾选待审核的订单。', type: 'warning' })
+    return
+  }
+  if (pendingSelectedOrders.value.length > MAX_BATCH_SIZE) {
+    ElNotification({
+      title: '超出数量限制',
+      message: `单次最多审核 ${MAX_BATCH_SIZE} 条订单，当前已选 ${pendingSelectedOrders.value.length} 条。`,
+      type: 'warning',
+    })
+    return
+  }
+  batchReviewAction.value = action
+  batchReviewRemark.value = ''
+  batchReviewResult.value = null
+  batchReviewVisible.value = true
+}
+
+async function confirmBatchReview() {
+  batchReviewLoading.value = true
+  try {
+    const orderIds = pendingSelectedOrders.value.map((o) => o.id)
+    const { data } = await http.post('/billing/recharge-orders/batch-review/', {
+      order_ids: orderIds,
+      action: batchReviewAction.value,
+      review_remark: batchReviewRemark.value,
+    })
+    batchReviewResult.value = data
+    selectedOrders.value = []
+    await Promise.all([loadOrders(), loadDashboard(), loadNotifications()])
+  } finally {
+    batchReviewLoading.value = false
+  }
+}
+
+function closeBatchReviewDialog() {
+  batchReviewVisible.value = false
+  batchReviewResult.value = null
+}
 
 const consumptionFilters = reactive({
   category: '',
@@ -404,7 +473,7 @@ onMounted(async () => {
 
               <el-tab-pane :label="isAdmin ? '订单审核' : '充值订单'" name="orders">
                 <el-row :gutter="12" style="margin-bottom: 12px">
-                  <el-col :span="8">
+                  <el-col :span="6">
                     <el-select v-model="orderFilters.status" style="width: 100%" placeholder="按状态筛选">
                       <el-option label="全部状态" value="" />
                       <el-option label="待审核" value="pending" />
@@ -412,15 +481,42 @@ onMounted(async () => {
                       <el-option label="已驳回" value="rejected" />
                     </el-select>
                   </el-col>
-                  <el-col v-if="isAdmin" :span="8">
+                  <el-col v-if="isAdmin" :span="6">
                     <el-input v-model="orderFilters.user_id" placeholder="按用户ID筛选" clearable />
                   </el-col>
-                  <el-col :span="8">
+                  <el-col :span="isAdmin ? 6 : 12">
                     <el-button @click="loadOrders">查询订单</el-button>
+                  </el-col>
+                  <el-col v-if="isAdmin" :span="6" style="text-align: right">
+                    <el-button
+                      type="success"
+                      plain
+                      :disabled="pendingSelectedOrders.length === 0"
+                      @click="openBatchReview('approved')"
+                    >
+                      批量通过（{{ pendingSelectedOrders.length }}）
+                    </el-button>
+                    <el-button
+                      type="danger"
+                      plain
+                      :disabled="pendingSelectedOrders.length === 0"
+                      style="margin-left: 8px"
+                      @click="openBatchReview('rejected')"
+                    >
+                      批量驳回（{{ pendingSelectedOrders.length }}）
+                    </el-button>
                   </el-col>
                 </el-row>
 
-                <el-table :data="orders" stripe border empty-text="暂无订单记录">
+                <el-table
+                  :data="orders"
+                  stripe
+                  border
+                  empty-text="暂无订单记录"
+                  class="orders-table"
+                  @selection-change="handleSelectionChange"
+                >
+                  <el-table-column v-if="isAdmin" type="selection" width="55" :selectable="(row) => row.status === 'pending'" />
                   <el-table-column prop="order_no" label="订单号" min-width="180" />
                   <el-table-column prop="user_name" label="用户" min-width="120" />
                   <el-table-column label="金额" min-width="100">
@@ -448,6 +544,89 @@ onMounted(async () => {
                     </template>
                   </el-table-column>
                 </el-table>
+
+                <el-dialog
+                  v-model="batchReviewVisible"
+                  :title="batchReviewAction === 'approved' ? '批量通过订单' : '批量驳回订单'"
+                  width="640px"
+                  :close-on-click-modal="false"
+                  @close="closeBatchReviewDialog"
+                >
+                  <template v-if="!batchReviewResult">
+                    <el-alert
+                      :title="`即将对 ${pendingSelectedOrders.length} 条待审核订单执行${batchReviewAction === 'approved' ? '通过' : '驳回'}操作`"
+                      type="info"
+                      :closable="false"
+                      show-icon
+                      style="margin-bottom: 16px"
+                    />
+                    <el-form label-position="top">
+                      <el-form-item :label="batchReviewAction === 'approved' ? '审核备注（可选）' : '驳回原因'">
+                        <el-input
+                          v-model="batchReviewRemark"
+                          type="textarea"
+                          :rows="3"
+                          :placeholder="batchReviewAction === 'approved' ? '请输入统一审核备注' : '请输入统一驳回原因'"
+                          maxlength="255"
+                          show-word-limit
+                        />
+                      </el-form-item>
+                    </el-form>
+                    <div style="margin-top: 8px">
+                      <div style="margin-bottom: 8px; font-weight: 600">已选订单预览（前 10 条）：</div>
+                      <el-table :data="pendingSelectedOrders.slice(0, 10)" size="small" border max-height="240">
+                        <el-table-column prop="order_no" label="订单号" min-width="160" />
+                        <el-table-column prop="user_name" label="用户" min-width="100" />
+                        <el-table-column label="金额" width="100">
+                          <template #default="{ row }">¥ {{ formatMoney(row.amount) }}</template>
+                        </el-table-column>
+                      </el-table>
+                      <div v-if="pendingSelectedOrders.length > 10" style="margin-top: 6px; color: var(--text-sub); font-size: 13px">
+                        ... 还有 {{ pendingSelectedOrders.length - 10 }} 条订单未显示
+                      </div>
+                    </div>
+                  </template>
+
+                  <template v-else>
+                    <el-result
+                      :icon="batchReviewResult.failure_count === 0 ? 'success' : 'warning'"
+                      :title="batchReviewResult.failure_count === 0 ? '全部处理成功' : '部分处理成功'"
+                      :sub-title="`共 ${batchReviewResult.total} 条，成功 ${batchReviewResult.success_count} 条，失败 ${batchReviewResult.failure_count} 条`"
+                    />
+                    <el-table v-if="batchReviewResult.results.length" :data="batchReviewResult.results" size="small" border max-height="320">
+                      <el-table-column prop="order_no" label="订单号" min-width="160">
+                        <template #default="{ row }">
+                          {{ row.order_no || `#${row.order_id}` }}
+                        </template>
+                      </el-table-column>
+                      <el-table-column label="结果" width="90">
+                        <template #default="{ row }">
+                          <el-tag :type="row.success ? 'success' : 'danger'" effect="plain" size="small">
+                            {{ row.success ? '成功' : '失败' }}
+                          </el-tag>
+                        </template>
+                      </el-table-column>
+                      <el-table-column label="失败原因" min-width="260">
+                        <template #default="{ row }">
+                          <span v-if="!row.success" style="color: var(--el-color-danger)">{{ row.reason }}</span>
+                          <span v-else style="color: var(--text-sub)">--</span>
+                        </template>
+                      </el-table-column>
+                    </el-table>
+                  </template>
+
+                  <template #footer>
+                    <template v-if="!batchReviewResult">
+                      <el-button @click="closeBatchReviewDialog">取消</el-button>
+                      <el-button :type="batchReviewAction === 'approved' ? 'success' : 'danger'" :loading="batchReviewLoading" @click="confirmBatchReview">
+                        确认{{ batchReviewAction === 'approved' ? '通过' : '驳回' }}
+                      </el-button>
+                    </template>
+                    <template v-else>
+                      <el-button type="primary" @click="closeBatchReviewDialog">关闭</el-button>
+                    </template>
+                  </template>
+                </el-dialog>
               </el-tab-pane>
 
               <el-tab-pane v-if="isAdmin" label="用户管理" name="users">

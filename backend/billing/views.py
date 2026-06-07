@@ -15,6 +15,7 @@ from billing.serializers import (
     ConsumptionCreateSerializer,
     ConsumptionRecordSerializer,
     RechargeCreateSerializer,
+    RechargeOrderBatchReviewSerializer,
     RechargeOrderCreateSerializer,
     RechargeOrderReviewSerializer,
     RechargeOrderSerializer,
@@ -124,6 +125,22 @@ class RechargeOrderReviewAPIView(APIView):
             review_remark=serializer.validated_data.get('review_remark', ''),
         )
         return Response(RechargeOrderSerializer(reviewed_order).data)
+
+
+class RechargeOrderBatchReviewAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsAdminRole]
+
+    def post(self, request):
+        serializer = RechargeOrderBatchReviewSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        result = LedgerService.batch_review_recharge_orders(
+            order_ids=serializer.validated_data['order_ids'],
+            action=serializer.validated_data['action'],
+            reviewer=request.user,
+            review_remark=serializer.validated_data.get('review_remark', ''),
+        )
+        return Response(result)
 
 
 class ConsumptionListCreateAPIView(APIView):

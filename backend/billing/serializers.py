@@ -157,6 +157,32 @@ class RechargeOrderReviewSerializer(serializers.Serializer):
     review_remark = serializers.CharField(max_length=255, required=False, allow_blank=True)
 
 
+class RechargeOrderBatchReviewSerializer(serializers.Serializer):
+    MAX_BATCH_SIZE = 50
+
+    order_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        min_length=1,
+        max_length=MAX_BATCH_SIZE,
+        error_messages={
+            'min_length': '请至少选择一条订单。',
+            'max_length': f'单次最多审核 {MAX_BATCH_SIZE} 条订单。',
+        },
+    )
+    action = serializers.ChoiceField(
+        choices=[
+            (RechargeOrder.STATUS_APPROVED, '通过'),
+            (RechargeOrder.STATUS_REJECTED, '驳回'),
+        ]
+    )
+    review_remark = serializers.CharField(max_length=255, required=False, allow_blank=True)
+
+    def validate_order_ids(self, value):
+        if len(value) != len(set(value)):
+            raise serializers.ValidationError('订单列表存在重复项。')
+        return value
+
+
 class ConsumptionCreateSerializer(serializers.Serializer):
     user_id = serializers.IntegerField(required=False)
     category = serializers.ChoiceField(choices=ConsumptionRecord.CATEGORY_CHOICES)
