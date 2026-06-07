@@ -86,6 +86,30 @@ const router = createRouter({
       component: () => import('../views/MyCouponsView.vue'),
       meta: { requiresAuth: true },
     },
+    {
+      path: '/my-tickets',
+      name: 'my-tickets',
+      component: () => import('../views/TicketStudentView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/ticket-pool',
+      name: 'ticket-pool',
+      component: () => import('../views/TicketPoolView.vue'),
+      meta: { requiresAuth: true, requiresAdmin: true },
+    },
+    {
+      path: '/ticket-workbench',
+      name: 'ticket-workbench',
+      component: () => import('../views/TicketWorkbenchView.vue'),
+      meta: { requiresAuth: true, requiresAdmin: true },
+    },
+    {
+      path: '/tickets/:id',
+      name: 'ticket-detail',
+      component: () => import('../views/TicketDetailView.vue'),
+      meta: { requiresAuth: true },
+    },
   ],
 })
 

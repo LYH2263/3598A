@@ -719,9 +719,12 @@ onMounted(async () => {
             <el-button v-if="isAdmin" style="margin-right: 8px" type="primary" plain @click="$router.push('/energy-analytics')">能耗视图</el-button>
             <el-button v-if="isAdmin" style="margin-right: 8px" type="primary" plain @click="$router.push('/message-center')">消息中心</el-button>
             <el-button v-if="isAdmin" style="margin-right: 8px" type="primary" plain @click="$router.push('/marketing-center')">营销中心</el-button>
+            <el-button v-if="isAdmin" style="margin-right: 8px" type="primary" plain @click="$router.push('/ticket-pool')">工单池</el-button>
+            <el-button v-if="isAdmin" style="margin-right: 8px" type="primary" plain @click="$router.push('/ticket-workbench')">我的待办</el-button>
             <el-button v-if="isAdmin" style="margin-right: 8px" type="primary" @click="$router.push('/consumption-analytics')">消费分析</el-button>
             <el-button v-else style="margin-right: 8px" type="primary" plain @click="$router.push('/my-stay')">我的入住</el-button>
             <el-button v-else style="margin-right: 8px" type="primary" plain @click="$router.push('/my-coupons')">我的优惠券</el-button>
+            <el-button v-else style="margin-right: 8px" type="primary" @click="$router.push('/my-tickets')">报修/工单</el-button>
             <el-button v-else style="margin-right: 8px" type="primary" @click="$router.push('/my-analytics')">我的分析</el-button>
             <el-button style="margin-right: 8px" @click="refreshAll">刷新数据</el-button>
             <el-button type="danger" plain @click="logout">退出登录</el-button>

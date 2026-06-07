@@ -25,6 +25,7 @@ INSTALLED_APPS = [
     'notices',
     'housing',
     'marketing',
+    'tickets',
 ]
 
 MIDDLEWARE = [
@@ -173,6 +174,11 @@ LOGGING = {
             'propagate': False,
         },
         'marketing': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'tickets': {
             'handlers': ['console'],
             'level': 'INFO',
             'propagate': False,
