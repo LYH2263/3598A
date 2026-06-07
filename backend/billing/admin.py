@@ -3,8 +3,11 @@ from django.contrib import admin
 from billing.models import (
     BalanceChangeLog,
     ConsumptionRecord,
+    MonthlyStatement,
     RechargeOrder,
     RechargeRecord,
+    ReconciliationDiff,
+    SettlementRun,
     Wallet,
 )
 
@@ -47,7 +50,59 @@ class BalanceChangeLogAdmin(admin.ModelAdmin):
         'balance_before',
         'balance_after',
         'operator',
+        'is_settled',
+        'settlement_period',
         'created_at',
     )
-    search_fields = ('user__username', 'operator', 'related_order_no')
-    list_filter = ('change_type',)
+    search_fields = ('user__username', 'operator', 'related_order_no', 'settlement_period')
+    list_filter = ('change_type', 'is_settled', 'settlement_period')
+
+
+@admin.register(MonthlyStatement)
+class MonthlyStatementAdmin(admin.ModelAdmin):
+    list_display = (
+        'id',
+        'user',
+        'period',
+        'opening_balance',
+        'closing_balance',
+        'status',
+        'generated_by',
+        'created_at',
+    )
+    search_fields = ('user__username', 'period', 'generated_by')
+    list_filter = ('status', 'period')
+
+
+@admin.register(SettlementRun)
+class SettlementRunAdmin(admin.ModelAdmin):
+    list_display = (
+        'id',
+        'period',
+        'mode',
+        'target_user_id',
+        'status',
+        'total_users',
+        'success_count',
+        'failed_count',
+        'triggered_by',
+        'started_at',
+        'finished_at',
+    )
+    search_fields = ('period', 'triggered_by')
+    list_filter = ('mode', 'status', 'period')
+
+
+@admin.register(ReconciliationDiff)
+class ReconciliationDiffAdmin(admin.ModelAdmin):
+    list_display = (
+        'id',
+        'run_id',
+        'user',
+        'wallet_balance',
+        'recalculated_balance',
+        'difference',
+        'created_at',
+    )
+    search_fields = ('run_id', 'user__username')
+    list_filter = ('period',)

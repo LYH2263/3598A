@@ -121,6 +121,51 @@ const notifications = reactive({
   items: [],
 })
 
+// ========= 月结管理（管理员） =========
+const settlementFilters = reactive({
+  period: '',
+  user_id: '',
+  status: '',
+})
+const statements = ref([])
+const settlementRuns = ref([])
+const reconciliationDiffs = ref([])
+const reconciliationSummary = reactive({
+  run_id: '',
+  total_users: 0,
+  diff_count: 0,
+})
+
+const runSettlementForm = reactive({
+  period: '',
+  auto_publish: true,
+  user_id: null,
+})
+const runSettlementVisible = ref(false)
+const runSettlementLoading = ref(false)
+
+const crossMonthAdjustForm = reactive({
+  user_id: null,
+  source_period: '',
+  target_period: '',
+  amount: null,
+  remark: '',
+})
+const crossMonthAdjustVisible = ref(false)
+const crossMonthAdjustLoading = ref(false)
+
+const reconciliationLoading = ref(false)
+
+// ========= 我的账单（学生） =========
+const myStatements = ref([])
+const selectedStatementPeriod = ref('')
+const statementDetail = reactive({
+  statement: null,
+  logs: [],
+})
+const statementDetailVisible = ref(false)
+const statementDetailLoading = ref(false)
+
 const adminUsers = ref([])
 const adminUserFilters = reactive({
   keyword: '',
@@ -151,6 +196,33 @@ const orderStatusMap = {
 const categoryMap = {
   water: '水费',
   electricity: '电费',
+}
+
+const statementStatusMap = {
+  draft: { label: '草稿', type: 'info' },
+  published: { label: '已发布', type: 'success' },
+  rolled_back: { label: '已回滚', type: 'danger' },
+}
+
+const settlementRunStatusMap = {
+  running: { label: '运行中', type: 'warning' },
+  success: { label: '成功', type: 'success' },
+  failed: { label: '失败', type: 'danger' },
+}
+
+const settlementRunModeMap = {
+  month: '按月跑批',
+  user: '按用户重跑',
+}
+
+const changeTypeMap = {
+  recharge: '充值入账',
+  consumption: '消费扣费',
+  freeze: '账户冻结',
+  unfreeze: '账户解冻',
+  adjust: '余额调整',
+  refund: '退款',
+  cross_month_adjust: '跨月调整',
 }
 
 function formatMoney(value) {
@@ -267,6 +339,160 @@ async function loadWalletLogs() {
   walletLogs.value = data
 }
 
+// ========= 月结管理 =========
+async function loadStatements() {
+  const params = {}
+  if (settlementFilters.period) params.period = settlementFilters.period
+  if (settlementFilters.user_id) params.user_id = settlementFilters.user_id
+  if (settlementFilters.status) params.status = settlementFilters.status
+  const { data } = await http.get('/billing/admin/statements/', { params })
+  statements.value = data
+}
+
+async function loadSettlementRuns() {
+  const { data } = await http.get('/billing/admin/settlement-runs/')
+  settlementRuns.value = data
+}
+
+async function loadReconciliationDiffs() {
+  const { data } = await http.get('/billing/admin/reconciliation/')
+  reconciliationDiffs.value = data
+}
+
+function openRunSettlementDialog() {
+  runSettlementForm.period = ''
+  runSettlementForm.auto_publish = true
+  runSettlementForm.user_id = null
+  runSettlementVisible.value = true
+}
+
+async function confirmRunSettlement() {
+  if (!runSettlementForm.period) {
+    ElNotification({ title: '请填写账期', message: '账期格式为 YYYY-MM。', type: 'warning' })
+    return
+  }
+  runSettlementLoading.value = true
+  try {
+    const payload = {
+      period: runSettlementForm.period,
+      auto_publish: runSettlementForm.auto_publish,
+    }
+    if (runSettlementForm.user_id) payload.user_id = runSettlementForm.user_id
+    const { data } = await http.post('/billing/admin/settlement-runs/', payload)
+    ElNotification({
+      title: '月结跑批已启动',
+      message: `状态：${settlementRunStatusMap[data.status]?.label || data.status}，共 ${data.total_users} 个用户。`,
+      type: 'success',
+    })
+    runSettlementVisible.value = false
+    await Promise.all([loadStatements(), loadSettlementRuns()])
+  } finally {
+    runSettlementLoading.value = false
+  }
+}
+
+async function publishStatement(row) {
+  try {
+    await http.post(`/billing/admin/statements/${row.id}/`, { action: 'publish' })
+    ElNotification({ title: '已发布', message: `${row.user_name} ${row.period} 月结单已发布。`, type: 'success' })
+    await loadStatements()
+  } catch (e) {
+    ElNotification({ title: '发布失败', message: e?.response?.data?.detail || String(e), type: 'error' })
+  }
+}
+
+async function rollbackStatement(row) {
+  try {
+    await http.post(`/billing/admin/statements/${row.id}/`, { action: 'rollback' })
+    ElNotification({ title: '已回滚', message: `${row.user_name} ${row.period} 月结单已回滚。`, type: 'success' })
+    await loadStatements()
+  } catch (e) {
+    ElNotification({ title: '回滚失败', message: e?.response?.data?.detail || String(e), type: 'error' })
+  }
+}
+
+async function runReconciliation() {
+  reconciliationLoading.value = true
+  try {
+    const { data } = await http.post('/billing/admin/reconciliation/')
+    Object.assign(reconciliationSummary, data)
+    await loadReconciliationDiffs()
+    ElNotification({
+      title: '账实校验完成',
+      message: `总用户 ${data.total_users}，差异账户 ${data.diff_count}。`,
+      type: data.diff_count === 0 ? 'success' : 'warning',
+    })
+  } finally {
+    reconciliationLoading.value = false
+  }
+}
+
+function openCrossMonthAdjustDialog() {
+  crossMonthAdjustForm.user_id = null
+  crossMonthAdjustForm.source_period = ''
+  crossMonthAdjustForm.target_period = ''
+  crossMonthAdjustForm.amount = null
+  crossMonthAdjustForm.remark = ''
+  crossMonthAdjustVisible.value = true
+}
+
+async function confirmCrossMonthAdjust() {
+  if (!crossMonthAdjustForm.user_id || !crossMonthAdjustForm.source_period || !crossMonthAdjustForm.target_period || crossMonthAdjustForm.amount == null) {
+    ElNotification({ title: '请填写完整', message: '用户、来源账期、目标账期、金额均为必填。', type: 'warning' })
+    return
+  }
+  crossMonthAdjustLoading.value = true
+  try {
+    await http.post('/billing/admin/cross-month-adjust/', {
+      user_id: crossMonthAdjustForm.user_id,
+      source_period: crossMonthAdjustForm.source_period,
+      target_period: crossMonthAdjustForm.target_period,
+      amount: crossMonthAdjustForm.amount,
+      remark: crossMonthAdjustForm.remark,
+    })
+    ElNotification({ title: '已完成', message: '跨月调整已入账至目标账期。', type: 'success' })
+    crossMonthAdjustVisible.value = false
+    await loadWalletLogs()
+  } catch (e) {
+    ElNotification({ title: '调整失败', message: e?.response?.data?.detail || String(e), type: 'error' })
+  } finally {
+    crossMonthAdjustLoading.value = false
+  }
+}
+
+// ========= 学生：我的账单 =========
+async function loadMyStatements() {
+  const { data } = await http.get('/billing/statements/')
+  myStatements.value = data
+}
+
+async function viewStatementDetail(period: string) {
+  selectedStatementPeriod.value = period
+  statementDetailLoading.value = true
+  try {
+    const { data } = await http.get(`/billing/statements/${period}/`)
+    statementDetail.statement = data.statement
+    statementDetail.logs = data.logs
+    statementDetailVisible.value = true
+  } finally {
+    statementDetailLoading.value = false
+  }
+}
+
+function downloadStatementCSV(period) {
+  const url = `/billing/statements/${period}/csv/`
+  http.get(url, { responseType: 'blob' }).then((res) => {
+    const blob = new Blob([res.data], { type: 'text/csv;charset=utf-8-sig' })
+    const link = document.createElement('a')
+    link.href = URL.createObjectURL(blob)
+    link.download = `statement_${authStore.user?.username || 'me'}_${period}.csv`
+    link.click()
+    URL.revokeObjectURL(link.href)
+  }).catch((e) => {
+    ElNotification({ title: '下载失败', message: e?.response?.data?.detail || String(e), type: 'error' })
+  })
+}
+
 async function loadAnnouncements() {
   const params = isAdmin.value ? { include_inactive: true } : {}
   const { data } = await http.get('/notices/announcements/', { params })
@@ -358,7 +584,11 @@ async function refreshAll() {
   loading.value = true
   try {
     const tasks = [loadDashboard(), loadOrders(), loadConsumptions(), loadConsumptionStats(), loadWalletLogs(), loadAnnouncements(), loadNotifications()]
-    if (isAdmin.value) tasks.push(loadAdminUsers())
+    if (isAdmin.value) {
+      tasks.push(loadAdminUsers(), loadStatements(), loadSettlementRuns(), loadReconciliationDiffs())
+    } else {
+      tasks.push(loadMyStatements())
+    }
     await Promise.all(tasks)
   } finally {
     loading.value = false
@@ -783,6 +1013,317 @@ onMounted(async () => {
                     </el-table>
                   </el-card>
                 </div>
+              </el-tab-pane>
+
+              <!-- ========= 月结管理（管理员） ========= -->
+              <el-tab-pane v-if="isAdmin" label="月结管理" name="settlement">
+                <el-card class="section-card" shadow="never" style="margin-bottom: 14px">
+                  <el-row :gutter="12" align="middle">
+                    <el-col :span="18">
+                      <h3 class="section-title" style="margin: 0">财务月结管理</h3>
+                      <p style="margin: 4px 0 0; color: var(--text-sub); font-size: 13px">
+                        支持按月全量跑批、按用户重跑、发布/回滚、账实校验与跨月调整
+                      </p>
+                    </el-col>
+                    <el-col :span="6" style="text-align: right">
+                      <el-button type="primary" @click="openRunSettlementDialog">执行月结跑批</el-button>
+                      <el-button type="success" plain style="margin-left: 8px" @click="openCrossMonthAdjustDialog">跨月调整</el-button>
+                      <el-button type="warning" plain style="margin-left: 8px" :loading="reconciliationLoading" @click="runReconciliation">账实校验</el-button>
+                    </el-col>
+                  </el-row>
+                </el-card>
+
+                <el-tabs tab-position="top">
+                  <el-tab-pane label="月结单列表" name="statements-list">
+                    <el-row :gutter="12" style="margin-bottom: 12px">
+                      <el-col :span="5">
+                        <el-input v-model="settlementFilters.period" placeholder="账期 YYYY-MM" clearable />
+                      </el-col>
+                      <el-col :span="5">
+                        <el-input v-model="settlementFilters.user_id" placeholder="用户ID" clearable />
+                      </el-col>
+                      <el-col :span="5">
+                        <el-select v-model="settlementFilters.status" placeholder="按状态" style="width: 100%" clearable>
+                          <el-option label="草稿" value="draft" />
+                          <el-option label="已发布" value="published" />
+                          <el-option label="已回滚" value="rolled_back" />
+                        </el-select>
+                      </el-col>
+                      <el-col :span="9">
+                        <el-button @click="loadStatements">查询</el-button>
+                        <el-button plain style="margin-left: 8px" @click="() => { settlementFilters.period = ''; settlementFilters.user_id = ''; settlementFilters.status = ''; loadStatements() }">重置</el-button>
+                      </el-col>
+                    </el-row>
+
+                    <el-table :data="statements" stripe border empty-text="暂无月结数据" max-height="520">
+                      <el-table-column prop="user_name" label="用户" min-width="120" />
+                      <el-table-column prop="period" label="账期" min-width="100" />
+                      <el-table-column label="期初余额" min-width="110">
+                        <template #default="{ row }">¥ {{ formatMoney(row.opening_balance) }}</template>
+                      </el-table-column>
+                      <el-table-column label="本月充值" min-width="110">
+                        <template #default="{ row }">¥ {{ formatMoney(row.recharge_total) }} ({{ row.recharge_count }}笔)</template>
+                      </el-table-column>
+                      <el-table-column label="水费" min-width="100">
+                        <template #default="{ row }">¥ {{ formatMoney(row.water_total) }} ({{ row.water_count }}笔)</template>
+                      </el-table-column>
+                      <el-table-column label="电费" min-width="100">
+                        <template #default="{ row }">¥ {{ formatMoney(row.electricity_total) }} ({{ row.electricity_count }}笔)</template>
+                      </el-table-column>
+                      <el-table-column label="退款" min-width="100">
+                        <template #default="{ row }">¥ {{ formatMoney(row.refund_total) }}</template>
+                      </el-table-column>
+                      <el-table-column label="跨月调整" min-width="100">
+                        <template #default="{ row }">¥ {{ formatMoney(row.cross_month_adjust_total) }}</template>
+                      </el-table-column>
+                      <el-table-column label="期末余额" min-width="110">
+                        <template #default="{ row }">¥ {{ formatMoney(row.closing_balance) }}</template>
+                      </el-table-column>
+                      <el-table-column label="状态" min-width="100">
+                        <template #default="{ row }">
+                          <el-tag :type="statementStatusMap[row.status]?.type || 'info'" effect="plain">
+                            {{ statementStatusMap[row.status]?.label || row.status }}
+                          </el-tag>
+                        </template>
+                      </el-table-column>
+                      <el-table-column prop="generated_by" label="操作人" min-width="100" />
+                      <el-table-column label="操作" min-width="180" fixed="right">
+                        <template #default="{ row }">
+                          <el-space>
+                            <el-button
+                              size="small"
+                              type="success"
+                              :disabled="row.status !== 'draft'"
+                              @click="publishStatement(row)"
+                            >发布</el-button>
+                            <el-button
+                              size="small"
+                              type="danger"
+                              plain
+                              :disabled="row.status !== 'published'"
+                              @click="rollbackStatement(row)"
+                            >回滚</el-button>
+                          </el-space>
+                        </template>
+                      </el-table-column>
+                    </el-table>
+                  </el-tab-pane>
+
+                  <el-tab-pane label="跑批记录" name="runs-list">
+                    <el-table :data="settlementRuns" stripe border empty-text="暂无跑批记录">
+                      <el-table-column prop="id" label="ID" width="70" />
+                      <el-table-column prop="period" label="账期" min-width="100" />
+                      <el-table-column label="模式" min-width="110">
+                        <template #default="{ row }">{{ settlementRunModeMap[row.mode] || row.mode }}</template>
+                      </el-table-column>
+                      <el-table-column prop="target_user_id" label="目标用户ID" min-width="110">
+                        <template #default="{ row }">{{ row.target_user_id || '--' }}</template>
+                      </el-table-column>
+                      <el-table-column label="状态" min-width="100">
+                        <template #default="{ row }">
+                          <el-tag :type="settlementRunStatusMap[row.status]?.type || 'info'" effect="plain">
+                            {{ settlementRunStatusMap[row.status]?.label || row.status }}
+                          </el-tag>
+                        </template>
+                      </el-table-column>
+                      <el-table-column prop="total_users" label="总数" width="80" />
+                      <el-table-column prop="success_count" label="成功" width="80" />
+                      <el-table-column prop="failed_count" label="失败" width="80" />
+                      <el-table-column prop="triggered_by" label="触发者" min-width="110" />
+                      <el-table-column label="开始时间" min-width="165">
+                        <template #default="{ row }">{{ formatDateTime(row.started_at) }}</template>
+                      </el-table-column>
+                      <el-table-column label="结束时间" min-width="165">
+                        <template #default="{ row }">{{ formatDateTime(row.finished_at) }}</template>
+                      </el-table-column>
+                      <el-table-column prop="message" label="错误信息" min-width="240" show-overflow-tooltip />
+                    </el-table>
+                  </el-tab-pane>
+
+                  <el-tab-pane label="账实校验差异" name="reconciliation-list">
+                    <el-alert
+                      v-if="reconciliationSummary.run_id"
+                      type="info"
+                      :closable="false"
+                      show-icon
+                      style="margin-bottom: 12px"
+                    >
+                      最近一次校验 run_id={{ reconciliationSummary.run_id }}，总用户 {{ reconciliationSummary.total_users }}，差异账户 {{ reconciliationSummary.diff_count }}
+                    </el-alert>
+                    <el-table :data="reconciliationDiffs" stripe border empty-text="暂无差异记录，可点击「账实校验」按钮执行">
+                      <el-table-column prop="run_id" label="校验ID" min-width="160" />
+                      <el-table-column prop="user_name" label="用户" min-width="120" />
+                      <el-table-column label="钱包余额" min-width="120">
+                        <template #default="{ row }">¥ {{ formatMoney(row.wallet_balance) }}</template>
+                      </el-table-column>
+                      <el-table-column label="重算余额" min-width="120">
+                        <template #default="{ row }">¥ {{ formatMoney(row.recalculated_balance) }}</template>
+                      </el-table-column>
+                      <el-table-column label="差额" min-width="110">
+                        <template #default="{ row }">
+                          <span style="color: var(--el-color-danger); font-weight: 600">¥ {{ formatMoney(row.difference) }}</span>
+                        </template>
+                      </el-table-column>
+                      <el-table-column prop="detail" label="详情" min-width="300" show-overflow-tooltip />
+                      <el-table-column label="时间" min-width="165">
+                        <template #default="{ row }">{{ formatDateTime(row.created_at) }}</template>
+                      </el-table-column>
+                    </el-table>
+                  </el-tab-pane>
+                </el-tabs>
+
+                <!-- 月结跑批弹窗 -->
+                <el-dialog v-model="runSettlementVisible" title="执行月结跑批" width="520px" :close-on-click-modal="false">
+                  <el-form label-position="top">
+                    <el-form-item label="账期（YYYY-MM）" required>
+                      <el-input v-model="runSettlementForm.period" placeholder="例如 2026-05" />
+                    </el-form-item>
+                    <el-form-item label="是否自动发布">
+                      <el-switch v-model="runSettlementForm.auto_publish" active-text="生成后直接发布" inactive-text="仅生成草稿" />
+                    </el-form-item>
+                    <el-form-item label="指定用户ID（可选，留空则全量跑批）">
+                      <el-input-number v-model="runSettlementForm.user_id" :min="1" :controls="false" style="width: 100%" placeholder="按用户重跑时填写" />
+                    </el-form-item>
+                  </el-form>
+                  <template #footer>
+                    <el-button @click="runSettlementVisible = false">取消</el-button>
+                    <el-button type="primary" :loading="runSettlementLoading" @click="confirmRunSettlement">确认跑批</el-button>
+                  </template>
+                </el-dialog>
+
+                <!-- 跨月调整弹窗 -->
+                <el-dialog v-model="crossMonthAdjustVisible" title="跨月调整" width="520px" :close-on-click-modal="false">
+                  <el-alert type="warning" :closable="false" show-icon style="margin-bottom: 14px">
+                    当来源账期已发布后，若需要对该月进行退款或调整，请通过此入口将金额写入目标账期（需晚于来源账期）。
+                  </el-alert>
+                  <el-form label-position="top">
+                    <el-form-item label="用户ID" required>
+                      <el-input-number v-model="crossMonthAdjustForm.user_id" :min="1" :controls="false" style="width: 100%" />
+                    </el-form-item>
+                    <el-form-item label="来源账期（YYYY-MM）" required>
+                      <el-input v-model="crossMonthAdjustForm.source_period" placeholder="已发布的账期，例如 2026-05" />
+                    </el-form-item>
+                    <el-form-item label="目标账期（YYYY-MM）" required>
+                      <el-input v-model="crossMonthAdjustForm.target_period" placeholder="必须晚于来源账期，例如 2026-06" />
+                    </el-form-item>
+                    <el-form-item label="调整金额（元）" required>
+                      <el-input-number v-model="crossMonthAdjustForm.amount" :precision="2" :step="10" style="width: 100%" placeholder="正数为补款，负数为扣款" />
+                    </el-form-item>
+                    <el-form-item label="调整原因">
+                      <el-input v-model="crossMonthAdjustForm.remark" type="textarea" :rows="2" maxlength="255" show-word-limit />
+                    </el-form-item>
+                  </el-form>
+                  <template #footer>
+                    <el-button @click="crossMonthAdjustVisible = false">取消</el-button>
+                    <el-button type="primary" :loading="crossMonthAdjustLoading" @click="confirmCrossMonthAdjust">确认调整</el-button>
+                  </template>
+                </el-dialog>
+              </el-tab-pane>
+
+              <!-- ========= 我的账单（学生） ========= -->
+              <el-tab-pane v-if="!isAdmin" label="我的账单" name="my-statements">
+                <el-card class="section-card" shadow="never">
+                  <h3 class="section-title">我的月结账单</h3>
+                  <p style="margin: 4px 0 14px; color: var(--text-sub); font-size: 13px">按月展示财务快照，可下载 CSV 明细</p>
+
+                  <el-table :data="myStatements" stripe border empty-text="暂无账单记录">
+                    <el-table-column prop="period" label="账期" min-width="110" />
+                    <el-table-column label="期初余额" min-width="110">
+                      <template #default="{ row }">¥ {{ formatMoney(row.opening_balance) }}</template>
+                    </el-table-column>
+                    <el-table-column label="本月充值" min-width="120">
+                      <template #default="{ row }">¥ {{ formatMoney(row.recharge_total) }} ({{ row.recharge_count }}笔)</template>
+                    </el-table-column>
+                    <el-table-column label="水费" min-width="100">
+                      <template #default="{ row }">¥ {{ formatMoney(row.water_total) }} ({{ row.water_count }}笔)</template>
+                    </el-table-column>
+                    <el-table-column label="电费" min-width="100">
+                      <template #default="{ row }">¥ {{ formatMoney(row.electricity_total) }} ({{ row.electricity_count }}笔)</template>
+                    </el-table-column>
+                    <el-table-column label="退款/调整" min-width="120">
+                      <template #default="{ row }">
+                        ¥ {{ formatMoney(Number(row.refund_total) + Number(row.adjust_total) + Number(row.cross_month_adjust_total)) }}
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="期末余额" min-width="110">
+                      <template #default="{ row }">¥ {{ formatMoney(row.closing_balance) }}</template>
+                    </el-table-column>
+                    <el-table-column label="状态" min-width="100">
+                      <template #default="{ row }">
+                        <el-tag :type="statementStatusMap[row.status]?.type || 'info'" effect="plain">
+                          {{ statementStatusMap[row.status]?.label || row.status }}
+                        </el-tag>
+                      </template>
+                    </el-table-column>
+                    <el-table-column label="操作" min-width="200" fixed="right">
+                      <template #default="{ row }">
+                        <el-space>
+                          <el-button size="small" type="primary" plain @click="viewStatementDetail(row.period)">查看明细</el-button>
+                          <el-button size="small" type="success" :disabled="row.status !== 'published'" @click="downloadStatementCSV(row.period)">下载 CSV</el-button>
+                        </el-space>
+                      </template>
+                    </el-table-column>
+                  </el-table>
+                </el-card>
+
+                <el-dialog v-model="statementDetailVisible" :title="`账单明细 - ${selectedStatementPeriod}`" width="960px">
+                  <el-skeleton :loading="statementDetailLoading" animated :rows="6">
+                    <template #default>
+                      <el-descriptions v-if="statementDetail.statement" :column="3" border style="margin-bottom: 16px">
+                        <el-descriptions-item label="账期">{{ statementDetail.statement.period }}</el-descriptions-item>
+                        <el-descriptions-item label="状态">
+                          <el-tag :type="statementStatusMap[statementDetail.statement.status]?.type || 'info'" effect="plain">
+                            {{ statementStatusMap[statementDetail.statement.status]?.label }}
+                          </el-tag>
+                        </el-descriptions-item>
+                        <el-descriptions-item label="操作人">{{ statementDetail.statement.generated_by || '--' }}</el-descriptions-item>
+                        <el-descriptions-item label="期初余额">¥ {{ formatMoney(statementDetail.statement.opening_balance) }}</el-descriptions-item>
+                        <el-descriptions-item label="期末余额">¥ {{ formatMoney(statementDetail.statement.closing_balance) }}</el-descriptions-item>
+                        <el-descriptions-item label="流水笔数">{{ statementDetail.logs.length }}</el-descriptions-item>
+                      </el-descriptions>
+
+                      <h4 style="margin: 0 0 8px">流水明细</h4>
+                      <el-table :data="statementDetail.logs" stripe border empty-text="暂无流水" max-height="380">
+                        <el-table-column label="时间" min-width="165">
+                          <template #default="{ row }">{{ formatDateTime(row.created_at) }}</template>
+                        </el-table-column>
+                        <el-table-column label="类型" min-width="110">
+                          <template #default="{ row }">{{ row.change_type_display || changeTypeMap[row.change_type] || row.change_type }}</template>
+                        </el-table-column>
+                        <el-table-column label="变动金额" min-width="110">
+                          <template #default="{ row }">
+                            <span :style="{ color: Number(row.amount_delta) >= 0 ? 'var(--el-color-success)' : 'var(--el-color-danger)' }">
+                              {{ Number(row.amount_delta) >= 0 ? '+' : '' }}{{ formatMoney(row.amount_delta) }}
+                            </span>
+                          </template>
+                        </el-table-column>
+                        <el-table-column label="变动前" min-width="110">
+                          <template #default="{ row }">¥ {{ formatMoney(row.balance_before) }}</template>
+                        </el-table-column>
+                        <el-table-column label="变动后" min-width="110">
+                          <template #default="{ row }">¥ {{ formatMoney(row.balance_after) }}</template>
+                        </el-table-column>
+                        <el-table-column prop="operator" label="操作人" min-width="100" />
+                        <el-table-column prop="remark" label="备注" min-width="180" show-overflow-tooltip />
+                        <el-table-column label="已结账" min-width="80">
+                          <template #default="{ row }">
+                            <el-tag :type="row.is_settled ? 'success' : 'info'" effect="plain" size="small">
+                              {{ row.is_settled ? '是' : '否' }}
+                            </el-tag>
+                          </template>
+                        </el-table-column>
+                      </el-table>
+                    </template>
+                  </el-skeleton>
+                  <template #footer>
+                    <el-button @click="statementDetailVisible = false">关闭</el-button>
+                    <el-button
+                      v-if="statementDetail.statement?.status === 'published'"
+                      type="primary"
+                      @click="() => downloadStatementCSV(selectedStatementPeriod)"
+                    >下载 CSV</el-button>
+                  </template>
+                </el-dialog>
               </el-tab-pane>
             </el-tabs>
           </el-card>

@@ -7,8 +7,11 @@ from accounts.models import Profile
 from billing.models import (
     BalanceChangeLog,
     ConsumptionRecord,
+    MonthlyStatement,
     RechargeOrder,
     RechargeRecord,
+    ReconciliationDiff,
+    SettlementRun,
     Wallet,
 )
 from billing.services.ledger_service import LedgerService
@@ -84,6 +87,7 @@ class ConsumptionRecordSerializer(serializers.ModelSerializer):
 
 class BalanceChangeLogSerializer(serializers.ModelSerializer):
     user_name = serializers.CharField(source='user.username', read_only=True)
+    change_type_display = serializers.CharField(source='get_change_type_display', read_only=True)
 
     class Meta:
         model = BalanceChangeLog
@@ -92,12 +96,16 @@ class BalanceChangeLogSerializer(serializers.ModelSerializer):
             'user',
             'user_name',
             'change_type',
+            'change_type_display',
             'amount_delta',
             'balance_before',
             'balance_after',
             'related_order_no',
             'operator',
             'remark',
+            'is_settled',
+            'settlement_period',
+            'cross_month_adjust_from',
             'created_at',
         )
 
@@ -223,3 +231,111 @@ class ConsumptionCreateSerializer(serializers.Serializer):
 class WalletActionSerializer(serializers.Serializer):
     action = serializers.ChoiceField(choices=[('freeze', '冻结'), ('unfreeze', '解冻')])
     reason = serializers.CharField(max_length=255, required=False, allow_blank=True)
+
+
+class MonthlyStatementSerializer(serializers.ModelSerializer):
+    user_name = serializers.CharField(source='user.username', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    has_previous = serializers.SerializerMethodField()
+    has_next = serializers.SerializerMethodField()
+
+    class Meta:
+        model = MonthlyStatement
+        fields = (
+            'id',
+            'user',
+            'user_name',
+            'period',
+            'opening_balance',
+            'recharge_total',
+            'recharge_count',
+            'water_total',
+            'water_count',
+            'electricity_total',
+            'electricity_count',
+            'refund_total',
+            'refund_count',
+            'adjust_total',
+            'adjust_count',
+            'cross_month_adjust_total',
+            'closing_balance',
+            'status',
+            'status_display',
+            'closed_at',
+            'generated_by',
+            'created_at',
+            'updated_at',
+            'has_previous',
+            'has_next',
+        )
+
+    def get_has_previous(self, obj):
+        return MonthlyStatement.objects.filter(
+            user=obj.user, period__lt=obj.period
+        ).exists()
+
+    def get_has_next(self, obj):
+        return MonthlyStatement.objects.filter(
+            user=obj.user, period__gt=obj.period
+        ).exists()
+
+
+class SettlementRunSerializer(serializers.ModelSerializer):
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    mode_display = serializers.CharField(source='get_mode_display', read_only=True)
+
+    class Meta:
+        model = SettlementRun
+        fields = (
+            'id',
+            'period',
+            'mode',
+            'mode_display',
+            'target_user_id',
+            'status',
+            'status_display',
+            'total_users',
+            'success_count',
+            'failed_count',
+            'message',
+            'triggered_by',
+            'started_at',
+            'finished_at',
+        )
+
+
+class RunSettlementSerializer(serializers.Serializer):
+    period = serializers.RegexField(r'^\d{4}-\d{2}$', help_text='账期 YYYY-MM')
+    auto_publish = serializers.BooleanField(default=True, required=False)
+    user_id = serializers.IntegerField(required=False, allow_null=True)
+
+
+class StatementActionSerializer(serializers.Serializer):
+    action = serializers.ChoiceField(choices=[('publish', '发布'), ('rollback', '回滚')])
+
+
+class CrossMonthAdjustSerializer(serializers.Serializer):
+    user_id = serializers.IntegerField()
+    source_period = serializers.RegexField(r'^\d{4}-\d{2}$')
+    target_period = serializers.RegexField(r'^\d{4}-\d{2}$')
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2)
+    remark = serializers.CharField(max_length=255, required=False, allow_blank=True)
+
+
+class ReconciliationDiffSerializer(serializers.ModelSerializer):
+    user_name = serializers.CharField(source='user.username', read_only=True)
+
+    class Meta:
+        model = ReconciliationDiff
+        fields = (
+            'id',
+            'run_id',
+            'user',
+            'user_name',
+            'period',
+            'wallet_balance',
+            'recalculated_balance',
+            'difference',
+            'detail',
+            'created_at',
+        )
