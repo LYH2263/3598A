@@ -87,6 +87,18 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     {
+      path: '/my-plans',
+      name: 'my-plans',
+      component: () => import('../views/MyPlansView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/plan-management',
+      name: 'plan-management',
+      component: () => import('../views/PlanManagementView.vue'),
+      meta: { requiresAuth: true, requiresAdmin: true },
+    },
+    {
       path: '/my-tickets',
       name: 'my-tickets',
       component: () => import('../views/TicketStudentView.vue'),

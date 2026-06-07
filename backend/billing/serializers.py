@@ -9,13 +9,16 @@ from billing.models import (
     ConsumptionRecord,
     DashboardPreference,
     MonthlyStatement,
+    PlanExecution,
     RechargeOrder,
+    RechargePlan,
     RechargeRecord,
     ReconciliationDiff,
     SettlementRun,
     Wallet,
 )
 from billing.services.ledger_service import LedgerService
+from billing.services.recharge_plan_service import RechargePlanService
 
 
 class WalletSerializer(serializers.ModelSerializer):
@@ -426,3 +429,133 @@ class BIFilterSerializer(serializers.Serializer):
 class BICompareSerializer(BIFilterSerializer):
     compare_start_date = serializers.DateField(required=False, allow_null=True)
     compare_end_date = serializers.DateField(required=False, allow_null=True)
+
+
+class RechargePlanSerializer(serializers.ModelSerializer):
+    user_name = serializers.CharField(source='user.username', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    period_display = serializers.CharField(source='get_period_display', read_only=True)
+    channel_display = serializers.CharField(source='get_channel_display', read_only=True)
+    failure_action_display = serializers.CharField(source='get_failure_action_display', read_only=True)
+    countdown_days = serializers.SerializerMethodField()
+    countdown_text = serializers.SerializerMethodField()
+
+    class Meta:
+        model = RechargePlan
+        fields = (
+            'id',
+            'user',
+            'user_name',
+            'name',
+            'amount',
+            'period',
+            'period_display',
+            'channel',
+            'channel_display',
+            'start_date',
+            'end_date',
+            'next_execution_date',
+            'last_execution_date',
+            'total_executions',
+            'success_count',
+            'failure_count',
+            'status',
+            'status_display',
+            'failure_action',
+            'failure_action_display',
+            'created_at',
+            'updated_at',
+            'paused_at',
+            'ended_at',
+            'end_reason',
+            'countdown_days',
+            'countdown_text',
+        )
+        read_only_fields = (
+            'id', 'user', 'user_name', 'status_display', 'period_display',
+            'channel_display', 'failure_action_display', 'created_at', 'updated_at',
+            'paused_at', 'ended_at', 'end_reason', 'next_execution_date',
+            'last_execution_date', 'total_executions', 'success_count', 'failure_count',
+            'countdown_days', 'countdown_text',
+        )
+
+    def get_countdown_days(self, obj):
+        from django.utils import timezone
+        if obj.status != RechargePlan.STATUS_ACTIVE:
+            return None
+        today = timezone.now().date()
+        delta = (obj.next_execution_date - today).days
+        return delta
+
+    def get_countdown_text(self, obj):
+        from django.utils import timezone
+        if obj.status != RechargePlan.STATUS_ACTIVE:
+            return ''
+        today = timezone.now().date()
+        delta = (obj.next_execution_date - today).days
+        if delta < 0:
+            return '已过期'
+        if delta == 0:
+            return '今天执行'
+        if delta == 1:
+            return '明天执行'
+        return f'{delta} 天后执行'
+
+
+class RechargePlanCreateSerializer(serializers.Serializer):
+    name = serializers.CharField(max_length=100, required=False, allow_blank=True, default='')
+    amount = serializers.DecimalField(max_digits=12, decimal_places=2)
+    period = serializers.ChoiceField(choices=RechargePlan.PERIOD_CHOICES)
+    channel = serializers.ChoiceField(choices=RechargeOrder.CHANNEL_CHOICES)
+    start_date = serializers.DateField()
+    end_date = serializers.DateField()
+    failure_action = serializers.ChoiceField(
+        choices=RechargePlan.FAILURE_ACTION_CHOICES,
+        required=False,
+        default=RechargePlan.FAILURE_ACTION_SKIP,
+    )
+
+    def create(self, validated_data):
+        request = self.context['request']
+        return RechargePlanService.create_plan(
+            user=request.user,
+            name=validated_data.get('name', ''),
+            amount=Decimal(validated_data['amount']),
+            period=validated_data['period'],
+            channel=validated_data['channel'],
+            start_date=validated_data['start_date'],
+            end_date=validated_data['end_date'],
+            failure_action=validated_data.get('failure_action', RechargePlan.FAILURE_ACTION_SKIP),
+        )
+
+
+class PlanActionSerializer(serializers.Serializer):
+    reason = serializers.CharField(max_length=255, required=False, allow_blank=True, default='')
+
+
+class PlanExecutionSerializer(serializers.ModelSerializer):
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    channel_display = serializers.CharField(source='get_channel_display', read_only=True)
+    plan_name = serializers.CharField(source='plan.name', read_only=True)
+    order_no = serializers.CharField(source='order.order_no', read_only=True, allow_null=True)
+
+    class Meta:
+        model = PlanExecution
+        fields = (
+            'id',
+            'plan',
+            'plan_name',
+            'user',
+            'scheduled_date',
+            'executed_at',
+            'status',
+            'status_display',
+            'order',
+            'order_no',
+            'amount',
+            'channel',
+            'channel_display',
+            'failure_reason',
+            'created_at',
+        )
+        read_only_fields = fields

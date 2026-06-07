@@ -1,6 +1,8 @@
 from django.urls import path
 
 from billing.views import (
+    AdminPlanExecutionListAPIView,
+    AdminRechargePlanListAPIView,
     BIBuildingRoomAPIView,
     BICategoryAPIView,
     BIChannelAPIView,
@@ -19,6 +21,7 @@ from billing.views import (
     DashboardPreferenceListAPIView,
     MonthlyStatementAdminDetailAPIView,
     MonthlyStatementAdminListAPIView,
+    PlanUpcomingAPIView,
     RechargeListCreateAPIView,
     RechargeOrderBatchReviewAPIView,
     RechargeOrderListCreateAPIView,
@@ -26,6 +29,8 @@ from billing.views import (
     ReconciliationAPIView,
     SettlementRunAPIView,
     StudentProfileAnalyticsAPIView,
+    StudentRechargePlanDetailAPIView,
+    StudentRechargePlanListAPIView,
     StudentStatementDetailAPIView,
     StudentStatementDownloadCSVAPIView,
     StudentStatementListAPIView,
@@ -72,4 +77,14 @@ urlpatterns = [
     # ========= 看板偏好 =========
     path('dashboard-preferences/', DashboardPreferenceListAPIView.as_view(), name='dashboard-preferences-list'),
     path('dashboard-preferences/<str:board_key>/', DashboardPreferenceDetailAPIView.as_view(), name='dashboard-preferences-detail'),
+
+    # ========= 学生侧：我的充值计划 =========
+    path('plans/', StudentRechargePlanListAPIView.as_view(), name='student-plans'),
+    path('plans/<int:plan_id>/', StudentRechargePlanDetailAPIView.as_view(), name='student-plan-detail'),
+    path('plans/<int:plan_id>/<str:action>/', StudentRechargePlanDetailAPIView.as_view(), name='student-plan-action'),
+    path('plans/upcoming/', PlanUpcomingAPIView.as_view(), name='plan-upcoming'),
+
+    # ========= 管理员侧：充值计划管理 =========
+    path('admin/plans/', AdminRechargePlanListAPIView.as_view(), name='admin-plans'),
+    path('admin/plan-executions/', AdminPlanExecutionListAPIView.as_view(), name='admin-plan-executions'),
 ]

@@ -3,6 +3,7 @@ from decimal import Decimal
 from django.contrib.auth.models import User
 from django.db import models
 from django.db.models import UniqueConstraint
+from django.utils import timezone
 
 
 class Wallet(models.Model):
@@ -324,3 +325,131 @@ class DashboardPreference(models.Model):
         constraints = [
             UniqueConstraint(fields=['user', 'board_key'], name='uniq_user_board_pref'),
         ]
+
+
+class RechargePlan(models.Model):
+    PERIOD_DAILY = 'daily'
+    PERIOD_WEEKLY = 'weekly'
+    PERIOD_MONTHLY = 'monthly'
+
+    PERIOD_CHOICES = [
+        (PERIOD_DAILY, '每日'),
+        (PERIOD_WEEKLY, '每周'),
+        (PERIOD_MONTHLY, '每月'),
+    ]
+
+    STATUS_ACTIVE = 'active'
+    STATUS_PAUSED = 'paused'
+    STATUS_ENDED = 'ended'
+    STATUS_EXPIRED = 'expired'
+
+    STATUS_CHOICES = [
+        (STATUS_ACTIVE, '执行中'),
+        (STATUS_PAUSED, '已暂停'),
+        (STATUS_ENDED, '已结束'),
+        (STATUS_EXPIRED, '已过期'),
+    ]
+
+    FAILURE_ACTION_SKIP = 'skip'
+    FAILURE_ACTION_PAUSE = 'pause'
+
+    FAILURE_ACTION_CHOICES = [
+        (FAILURE_ACTION_SKIP, '跳过本次继续执行'),
+        (FAILURE_ACTION_PAUSE, '暂停计划等待处理'),
+    ]
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='recharge_plans')
+    name = models.CharField(max_length=100, help_text='计划名称')
+    amount = models.DecimalField(max_digits=12, decimal_places=2, help_text='每次充值金额')
+    period = models.CharField(max_length=20, choices=PERIOD_CHOICES, help_text='扣款周期')
+    channel = models.CharField(max_length=20, choices=RechargeOrder.CHANNEL_CHOICES, help_text='充值渠道')
+    start_date = models.DateField(help_text='开始日期')
+    end_date = models.DateField(help_text='结束日期')
+    next_execution_date = models.DateField(db_index=True, help_text='下次执行日期')
+    last_execution_date = models.DateField(null=True, blank=True, help_text='上次执行日期')
+    total_executions = models.IntegerField(default=0, help_text='已执行次数')
+    success_count = models.IntegerField(default=0, help_text='成功次数')
+    failure_count = models.IntegerField(default=0, help_text='失败次数')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_ACTIVE, db_index=True)
+    failure_action = models.CharField(
+        max_length=20,
+        choices=FAILURE_ACTION_CHOICES,
+        default=FAILURE_ACTION_SKIP,
+        help_text='失败时处理策略',
+    )
+    created_by = models.CharField(max_length=64, default='student')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+    paused_at = models.DateTimeField(null=True, blank=True)
+    ended_at = models.DateTimeField(null=True, blank=True)
+    end_reason = models.CharField(max_length=255, blank=True, default='')
+
+    class Meta:
+        db_table = 'recharge_plans'
+        ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['user', 'status'], name='plan_user_status_idx'),
+            models.Index(fields=['status', 'next_execution_date'], name='plan_status_next_idx'),
+        ]
+
+    def __str__(self) -> str:
+        return f'{self.user.username} - {self.name} ({self.get_period_display()})'
+
+    def compute_next_execution_date(self, from_date=None) -> timezone.date:
+        from_date = from_date or (self.last_execution_date or self.start_date)
+        if self.period == self.PERIOD_DAILY:
+            return from_date + timezone.timedelta(days=1)
+        if self.period == self.PERIOD_WEEKLY:
+            return from_date + timezone.timedelta(days=7)
+        if self.period == self.PERIOD_MONTHLY:
+            year = from_date.year
+            month = from_date.month + 1
+            if month > 12:
+                month = 1
+                year += 1
+            day = min(from_date.day, 28)
+            return timezone.datetime(year, month, day).date()
+        return from_date
+
+
+class PlanExecution(models.Model):
+    STATUS_PENDING = 'pending'
+    STATUS_SUCCESS = 'success'
+    STATUS_FAILED = 'failed'
+    STATUS_SKIPPED = 'skipped'
+
+    STATUS_CHOICES = [
+        (STATUS_PENDING, '待处理'),
+        (STATUS_SUCCESS, '执行成功'),
+        (STATUS_FAILED, '执行失败'),
+        (STATUS_SKIPPED, '已跳过'),
+    ]
+
+    plan = models.ForeignKey(RechargePlan, on_delete=models.CASCADE, related_name='executions')
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='plan_executions')
+    scheduled_date = models.DateField(db_index=True, help_text='计划执行日期')
+    executed_at = models.DateTimeField(null=True, blank=True, help_text='实际执行时间')
+    status = models.CharField(max_length=20, choices=STATUS_CHOICES, default=STATUS_PENDING, db_index=True)
+    order = models.OneToOneField(
+        RechargeOrder,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='plan_execution',
+        help_text='关联的充值订单',
+    )
+    amount = models.DecimalField(max_digits=12, decimal_places=2, help_text='本次充值金额')
+    channel = models.CharField(max_length=20, choices=RechargeOrder.CHANNEL_CHOICES)
+    failure_reason = models.CharField(max_length=500, blank=True, default='')
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'plan_executions'
+        ordering = ['-scheduled_date', '-created_at']
+        indexes = [
+            models.Index(fields=['plan', 'scheduled_date'], name='exec_plan_date_idx'),
+            models.Index(fields=['user', 'status'], name='exec_user_status_idx'),
+        ]
+
+    def __str__(self) -> str:
+        return f'Plan#{self.plan_id} @ {self.scheduled_date} - {self.get_status_display()}'

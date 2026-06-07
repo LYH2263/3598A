@@ -4,7 +4,9 @@ from billing.models import (
     BalanceChangeLog,
     ConsumptionRecord,
     MonthlyStatement,
+    PlanExecution,
     RechargeOrder,
+    RechargePlan,
     RechargeRecord,
     ReconciliationDiff,
     SettlementRun,
@@ -106,3 +108,41 @@ class ReconciliationDiffAdmin(admin.ModelAdmin):
     )
     search_fields = ('run_id', 'user__username')
     list_filter = ('period',)
+
+
+@admin.register(RechargePlan)
+class RechargePlanAdmin(admin.ModelAdmin):
+    list_display = (
+        'id',
+        'user',
+        'name',
+        'amount',
+        'period',
+        'status',
+        'next_execution_date',
+        'total_executions',
+        'success_count',
+        'failure_count',
+        'created_at',
+    )
+    search_fields = ('name', 'user__username')
+    list_filter = ('status', 'period', 'channel')
+    date_hierarchy = 'created_at'
+
+
+@admin.register(PlanExecution)
+class PlanExecutionAdmin(admin.ModelAdmin):
+    list_display = (
+        'id',
+        'plan',
+        'user',
+        'scheduled_date',
+        'executed_at',
+        'status',
+        'amount',
+        'order',
+        'failure_reason',
+    )
+    search_fields = ('plan__name', 'user__username', 'order__order_no')
+    list_filter = ('status',)
+    date_hierarchy = 'scheduled_date'

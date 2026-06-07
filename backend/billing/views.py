@@ -7,6 +7,7 @@ from django.db.models import Count, Sum
 from django.db.models.functions import TruncDate
 from django.http import HttpResponse
 from rest_framework import permissions, status
+from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -17,7 +18,9 @@ from billing.models import (
     ConsumptionRecord,
     DashboardPreference,
     MonthlyStatement,
+    PlanExecution,
     RechargeOrder,
+    RechargePlan,
     RechargeRecord,
     ReconciliationDiff,
     SettlementRun,
@@ -33,11 +36,15 @@ from billing.serializers import (
     DashboardPreferenceSaveSerializer,
     DashboardPreferenceSerializer,
     MonthlyStatementSerializer,
+    PlanActionSerializer,
+    PlanExecutionSerializer,
     RechargeCreateSerializer,
     RechargeOrderBatchReviewSerializer,
     RechargeOrderCreateSerializer,
     RechargeOrderReviewSerializer,
     RechargeOrderSerializer,
+    RechargePlanCreateSerializer,
+    RechargePlanSerializer,
     RechargeRecordSerializer,
     ReconciliationDiffSerializer,
     RunSettlementSerializer,
@@ -49,6 +56,7 @@ from billing.serializers import (
 from billing.services.bi_analytics_service import BIAnalyticsService
 from billing.services.ledger_service import LedgerService
 from billing.services.monthly_closing_service import MonthlyClosingService
+from billing.services.recharge_plan_service import RechargePlanService
 
 
 class DashboardAPIView(APIView):
@@ -823,3 +831,133 @@ class DashboardPreferenceDetailAPIView(APIView):
             },
         )
         return Response(DashboardPreferenceSerializer(pref).data, status=status.HTTP_200_OK if not created else status.HTTP_201_CREATED)
+
+
+# ============= 学生侧：我的充值计划 =============
+
+class StudentRechargePlanListAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        role = getattr(request.user.profile, 'role', Profile.ROLE_STUDENT)
+        if role != Profile.ROLE_STUDENT:
+            return Response({'detail': '仅学生可访问。'}, status=status.HTTP_403_FORBIDDEN)
+        plans = RechargePlan.objects.filter(user=request.user).select_related('user')
+        status_filter = request.query_params.get('status', '').strip()
+        if status_filter:
+            plans = plans.filter(status=status_filter)
+        return Response(RechargePlanSerializer(plans, many=True).data)
+
+    def post(self, request):
+        role = getattr(request.user.profile, 'role', Profile.ROLE_STUDENT)
+        if role != Profile.ROLE_STUDENT:
+            return Response({'detail': '仅学生可创建充值计划。'}, status=status.HTTP_403_FORBIDDEN)
+        serializer = RechargePlanCreateSerializer(data=request.data, context={'request': request})
+        serializer.is_valid(raise_exception=True)
+        plan = serializer.save()
+        return Response(RechargePlanSerializer(plan).data, status=status.HTTP_201_CREATED)
+
+
+class StudentRechargePlanDetailAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def _get_plan(self, request, plan_id: int):
+        role = getattr(request.user.profile, 'role', Profile.ROLE_STUDENT)
+        if role == Profile.ROLE_ADMIN:
+            return RechargePlan.objects.filter(id=plan_id).select_related('user').first()
+        return RechargePlan.objects.filter(id=plan_id, user=request.user).select_related('user').first()
+
+    def get(self, request, plan_id: int):
+        plan = self._get_plan(request, plan_id)
+        if not plan:
+            return Response({'detail': '充值计划不存在。'}, status=status.HTTP_404_NOT_FOUND)
+        executions = PlanExecution.objects.filter(plan=plan).order_by('-scheduled_date')[:100]
+        return Response({
+            'plan': RechargePlanSerializer(plan).data,
+            'executions': PlanExecutionSerializer(executions, many=True).data,
+        })
+
+    def post(self, request, plan_id: int, action: str):
+        plan = self._get_plan(request, plan_id)
+        if not plan:
+            return Response({'detail': '充值计划不存在。'}, status=status.HTTP_404_NOT_FOUND)
+        if getattr(request.user.profile, 'role', '') != Profile.ROLE_ADMIN and plan.user_id != request.user.id:
+            return Response({'detail': '无权限操作。'}, status=status.HTTP_403_FORBIDDEN)
+
+        serializer = PlanActionSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        reason = serializer.validated_data.get('reason', '')
+
+        try:
+            if action == 'pause':
+                plan = RechargePlanService.pause_plan(plan, request.user, reason)
+            elif action == 'resume':
+                plan = RechargePlanService.resume_plan(plan)
+            elif action == 'end':
+                plan = RechargePlanService.end_plan(plan, reason)
+            else:
+                return Response({'detail': '不支持的操作。'}, status=status.HTTP_400_BAD_REQUEST)
+        except ValidationError as e:
+            return Response({'detail': str(e.detail)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(RechargePlanSerializer(plan).data)
+
+
+class PlanUpcomingAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        days = int(request.query_params.get('days', 7))
+        days = max(1, min(days, 30))
+        role = getattr(request.user.profile, 'role', Profile.ROLE_STUDENT)
+        if role == Profile.ROLE_ADMIN:
+            user_id = request.query_params.get('user_id', '').strip()
+            target_user = request.user
+            if user_id:
+                from django.contrib.auth.models import User
+                target_user = User.objects.filter(id=user_id).first() or request.user
+            upcoming = RechargePlanService.get_upcoming_executions(target_user, days)
+        else:
+            upcoming = RechargePlanService.get_upcoming_executions(request.user, days)
+        return Response({'days': days, 'upcoming': upcoming})
+
+
+# ============= 管理员侧：充值计划管理 =============
+
+class AdminRechargePlanListAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsAdminRole]
+
+    def get(self, request):
+        queryset = RechargePlan.objects.select_related('user').all()
+        status_filter = request.query_params.get('status', '').strip()
+        user_id = request.query_params.get('user_id', '').strip()
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+        if user_id:
+            queryset = queryset.filter(user_id=user_id)
+        return Response(RechargePlanSerializer(queryset[:500], many=True).data)
+
+
+class AdminPlanExecutionListAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsAdminRole]
+
+    def get(self, request):
+        queryset = PlanExecution.objects.select_related('user', 'plan', 'order').all()
+        status_filter = request.query_params.get('status', '').strip()
+        user_id = request.query_params.get('user_id', '').strip()
+        plan_id = request.query_params.get('plan_id', '').strip()
+        start_date = request.query_params.get('start_date', '').strip()
+        end_date = request.query_params.get('end_date', '').strip()
+
+        if status_filter:
+            queryset = queryset.filter(status=status_filter)
+        if user_id:
+            queryset = queryset.filter(user_id=user_id)
+        if plan_id:
+            queryset = queryset.filter(plan_id=plan_id)
+        if start_date:
+            queryset = queryset.filter(scheduled_date__gte=start_date)
+        if end_date:
+            queryset = queryset.filter(scheduled_date__lte=end_date)
+
+        return Response(PlanExecutionSerializer(queryset[:500], many=True).data)
