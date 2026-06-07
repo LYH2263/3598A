@@ -126,24 +126,26 @@ class LedgerService:
                 order=order,
             )
             order.status = RechargeOrder.STATUS_APPROVED
-            notify_title = '充值订单审核通过'
-            notify_content = f'订单 {order.order_no} 已审核通过，金额 ¥{order.amount} 已入账。'
         else:
             order.status = RechargeOrder.STATUS_REJECTED
-            notify_title = '充值订单被驳回'
-            notify_content = f'订单 {order.order_no} 已被驳回，请联系管理员。'
 
         order.reviewer = reviewer
         order.review_remark = review_remark
         order.reviewed_at = timezone.now()
         order.save(update_fields=['status', 'reviewer', 'review_remark', 'reviewed_at', 'updated_at'])
 
-        NotificationService.create_user_notification(
-            user=order.user,
-            title=notify_title,
-            content=notify_content,
-            notice_type='order',
-        )
+        if action == RechargeOrder.STATUS_APPROVED:
+            NotificationService.dispatch_for_user(
+                'order_approved',
+                order.user,
+                {'order_no': order.order_no, 'amount': str(order.amount)},
+            )
+        else:
+            NotificationService.dispatch_for_user(
+                'order_rejected',
+                order.user,
+                {'order_no': order.order_no},
+            )
 
         return order
 
@@ -199,24 +201,26 @@ class LedgerService:
                         order=order,
                     )
                     order.status = RechargeOrder.STATUS_APPROVED
-                    notify_title = '充值订单审核通过'
-                    notify_content = f'订单 {order.order_no} 已审核通过，金额 ¥{order.amount} 已入账。'
                 else:
                     order.status = RechargeOrder.STATUS_REJECTED
-                    notify_title = '充值订单被驳回'
-                    notify_content = f'订单 {order.order_no} 已被驳回，请联系管理员。'
 
                 order.reviewer = reviewer
                 order.review_remark = review_remark
                 order.reviewed_at = timezone.now()
                 order.save(update_fields=['status', 'reviewer', 'review_remark', 'reviewed_at', 'updated_at'])
 
-                NotificationService.create_user_notification(
-                    user=order.user,
-                    title=notify_title,
-                    content=notify_content,
-                    notice_type='order',
-                )
+                if action == RechargeOrder.STATUS_APPROVED:
+                    NotificationService.dispatch_for_user(
+                        'order_approved',
+                        order.user,
+                        {'order_no': order.order_no, 'amount': str(order.amount)},
+                    )
+                else:
+                    NotificationService.dispatch_for_user(
+                        'order_rejected',
+                        order.user,
+                        {'order_no': order.order_no},
+                    )
 
                 return {
                     'order_id': order_id,
@@ -281,11 +285,10 @@ class LedgerService:
             remark=reason or '管理员冻结账户',
         )
 
-        NotificationService.create_user_notification(
-            user=user,
-            title='账户已冻结',
-            content='您的账户已被冻结，暂无法进行充值或消费，请联系管理员。',
-            notice_type='security',
+        NotificationService.dispatch_for_user(
+            'account_frozen',
+            user,
+            {'reason': reason or '未填写原因'},
         )
 
         return wallet
@@ -313,12 +316,7 @@ class LedgerService:
             remark=reason or '管理员解冻账户',
         )
 
-        NotificationService.create_user_notification(
-            user=user,
-            title='账户已解冻',
-            content='您的账户已解除冻结，可正常进行充值与消费。',
-            notice_type='security',
-        )
+        NotificationService.dispatch_for_user('account_unfrozen', user)
 
         return wallet
 

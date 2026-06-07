@@ -32,6 +32,18 @@ const router = createRouter({
       component: () => import('../views/DashboardView.vue'),
       meta: { requiresAuth: true },
     },
+    {
+      path: '/notification-preferences',
+      name: 'notification-preferences',
+      component: () => import('../views/NotificationPreferencesView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/message-center',
+      name: 'message-center',
+      component: () => import('../views/MessageCenterView.vue'),
+      meta: { requiresAuth: true, requiresAdmin: true },
+    },
   ],
 })
 
@@ -44,6 +56,10 @@ router.beforeEach((to) => {
   }
 
   if (to.meta.guestOnly && authStore.isLoggedIn) {
+    return { name: 'dashboard' }
+  }
+
+  if (to.meta.requiresAdmin && authStore.user?.profile?.role !== 'admin') {
     return { name: 'dashboard' }
   }
 

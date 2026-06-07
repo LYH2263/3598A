@@ -86,11 +86,10 @@ class RequestResetEmailCodeAPIView(APIView):
         code = PasswordResetService.issue_email_code(user)
         masked_email = PasswordResetService.masked_email(user.email)
 
-        NotificationService.create_user_notification(
-            user=user,
-            title='密码重置邮箱验证码',
-            content=f'您的密码重置验证码为：{code}，5分钟内有效。',
-            notice_type='security',
+        NotificationService.dispatch_for_user(
+            'password_reset_code',
+            user,
+            {'code': code, 'masked_email': masked_email},
         )
 
         logger.info('Reset email code issued for user: %s', user.username)
@@ -112,12 +111,7 @@ class PasswordResetAPIView(APIView):
         serializer.is_valid(raise_exception=True)
         user = serializer.save()
 
-        NotificationService.create_user_notification(
-            user=user,
-            title='密码变更提醒',
-            content='您的账号密码已重置。如果不是本人操作，请立即联系管理员。',
-            notice_type='security',
-        )
+        NotificationService.dispatch_for_user('password_changed', user)
 
         logger.info('Password reset: %s', user.username)
         return Response({'detail': '密码重置成功，请使用新密码登录。'})
@@ -160,12 +154,7 @@ class AdminUserDetailAPIView(APIView):
         serializer.is_valid(raise_exception=True)
         serializer.update(user, serializer.validated_data)
 
-        NotificationService.create_user_notification(
-            user=user,
-            title='账号状态变更提醒',
-            content='管理员已更新您的账号角色或启用状态。',
-            notice_type='system',
-        )
+        NotificationService.dispatch_for_user('account_updated', user)
 
         logger.info('Admin %s updated user %s', request.user.username, user.username)
         return Response({'user': AdminUserSerializer(user).data})

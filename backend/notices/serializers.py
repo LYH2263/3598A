@@ -1,7 +1,14 @@
 from django.utils import timezone
 from rest_framework import serializers
 
-from notices.models import Announcement, UserNotification
+from notices.models import (
+    Announcement,
+    MessageDeliveryLog,
+    MessageTemplate,
+    MessageType,
+    UserNotification,
+    UserNotificationPreference,
+)
 
 
 class AnnouncementSerializer(serializers.ModelSerializer):
@@ -66,3 +73,162 @@ class NotificationReadSerializer(serializers.Serializer):
         notification.read_at = timezone.now()
         notification.save(update_fields=['is_read', 'read_at'])
         return {'updated_count': 1}
+
+
+class MessageTemplateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = MessageTemplate
+        fields = (
+            'id',
+            'message_type',
+            'language',
+            'title_template',
+            'content_template',
+            'variables_schema',
+            'is_active',
+            'created_at',
+            'updated_at',
+        )
+
+
+class MessageTypeSerializer(serializers.ModelSerializer):
+    templates = MessageTemplateSerializer(many=True, read_only=True)
+    channels_display = serializers.SerializerMethodField()
+
+    class Meta:
+        model = MessageType
+        fields = (
+            'id',
+            'code',
+            'name_zh',
+            'name_en',
+            'description_zh',
+            'description_en',
+            'category',
+            'is_enabled',
+            'default_channels',
+            'channels_display',
+            'quiet_hours_start',
+            'quiet_hours_end',
+            'templates',
+            'created_at',
+            'updated_at',
+        )
+
+    def get_channels_display(self, obj):
+        label_map = dict(MessageType.CHANNEL_CHOICES)
+        return [label_map.get(c, c) for c in obj.default_channels]
+
+
+class MessageTypeCreateUpdateSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = MessageType
+        fields = (
+            'code',
+            'name_zh',
+            'name_en',
+            'description_zh',
+            'description_en',
+            'category',
+            'is_enabled',
+            'default_channels',
+            'quiet_hours_start',
+            'quiet_hours_end',
+        )
+
+
+class MessageDeliveryLogSerializer(serializers.ModelSerializer):
+    username = serializers.CharField(source='user.username', read_only=True)
+    status_display = serializers.CharField(source='get_status_display', read_only=True)
+    channel_display = serializers.CharField(source='get_channel_display', read_only=True)
+
+    class Meta:
+        model = MessageDeliveryLog
+        fields = (
+            'id',
+            'event_id',
+            'username',
+            'user_id',
+            'message_type_code',
+            'channel',
+            'channel_display',
+            'status',
+            'status_display',
+            'rendered_title',
+            'rendered_content',
+            'variables',
+            'language',
+            'error_message',
+            'retry_count',
+            'sent_at',
+            'created_at',
+            'updated_at',
+        )
+
+
+class UserNotificationPreferenceSerializer(serializers.ModelSerializer):
+    message_type_detail = MessageTypeSerializer(source='message_type', read_only=True)
+    message_type_code = serializers.CharField(source='message_type.code', read_only=True)
+
+    class Meta:
+        model = UserNotificationPreference
+        fields = (
+            'id',
+            'message_type',
+            'message_type_code',
+            'message_type_detail',
+            'enabled_channels',
+            'updated_at',
+        )
+
+
+class UserNotificationPreferenceWriteSerializer(serializers.Serializer):
+    message_type_id = serializers.IntegerField()
+    enabled_channels = serializers.ListField(child=serializers.CharField(max_length=20))
+
+    def validate_enabled_channels(self, value):
+        valid = {c[0] for c in MessageType.CHANNEL_CHOICES}
+        for ch in value:
+            if ch not in valid:
+                raise serializers.ValidationError(f'非法渠道: {ch}')
+        return value
+
+    def save(self, **kwargs):
+        request = self.context['request']
+        mt_id = self.validated_data['message_type_id']
+        channels = self.validated_data['enabled_channels']
+
+        message_type = MessageType.objects.filter(id=mt_id).first()
+        if not message_type:
+            raise serializers.ValidationError({'message_type_id': '消息类型不存在。'})
+
+        pref, _ = UserNotificationPreference.objects.update_or_create(
+            user=request.user,
+            message_type=message_type,
+            defaults={'enabled_channels': channels},
+        )
+        return pref
+
+
+class MessageTemplateWriteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = MessageTemplate
+        fields = (
+            'message_type',
+            'language',
+            'title_template',
+            'content_template',
+            'variables_schema',
+            'is_active',
+        )
+
+    def validate(self, data):
+        qs = MessageTemplate.objects.filter(
+            message_type=data['message_type'],
+            language=data['language'],
+        )
+        if self.instance:
+            qs = qs.exclude(id=self.instance.id)
+        if qs.exists():
+            raise serializers.ValidationError('该语言模板已存在。')
+        return data
