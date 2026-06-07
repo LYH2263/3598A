@@ -13,6 +13,7 @@ const authStore = useAuthStore()
 const loading = ref(true)
 const actionLoading = ref(false)
 const activeTab = ref('overview')
+const topBuildings = ref([])
 
 const dashboard = reactive({
   wallet: { balance: '0.00', is_frozen: false, frozen_reason: '' },
@@ -580,12 +581,28 @@ async function walletAction(row, action) {
   await Promise.all([loadAdminUsers(), loadWalletLogs()])
 }
 
+async function loadTopBuildings() {
+  try {
+    const { data } = await http.get('/housing/energy/top-buildings/')
+    topBuildings.value = data
+  } catch (_e) {
+    topBuildings.value = []
+  }
+}
+
+const topBuildingsChart = computed(() => {
+  return topBuildings.value.slice(0, 10).map((item) => ({
+    label: item.building_name || `楼栋#${item.building_id}`,
+    value: formatMoney(item.total_cost),
+  }))
+})
+
 async function refreshAll() {
   loading.value = true
   try {
     const tasks = [loadDashboard(), loadOrders(), loadConsumptions(), loadConsumptionStats(), loadWalletLogs(), loadAnnouncements(), loadNotifications()]
     if (isAdmin.value) {
-      tasks.push(loadAdminUsers(), loadStatements(), loadSettlementRuns(), loadReconciliationDiffs())
+      tasks.push(loadAdminUsers(), loadStatements(), loadSettlementRuns(), loadReconciliationDiffs(), loadTopBuildings())
     } else {
       tasks.push(loadMyStatements())
     }
@@ -629,8 +646,11 @@ onMounted(async () => {
           </el-col>
           <el-col :xs="24" :sm="6" style="text-align: right">
             <el-button style="margin-right: 8px" @click="$router.push('/notification-preferences')">通知偏好</el-button>
+            <el-button v-if="isAdmin" style="margin-right: 8px" type="primary" plain @click="$router.push('/building-management')">楼宇管理</el-button>
+            <el-button v-if="isAdmin" style="margin-right: 8px" type="primary" plain @click="$router.push('/energy-analytics')">能耗视图</el-button>
             <el-button v-if="isAdmin" style="margin-right: 8px" type="primary" plain @click="$router.push('/message-center')">消息中心</el-button>
             <el-button v-if="isAdmin" style="margin-right: 8px" type="primary" @click="$router.push('/consumption-analytics')">消费分析</el-button>
+            <el-button v-else style="margin-right: 8px" type="primary" plain @click="$router.push('/my-stay')">我的入住</el-button>
             <el-button v-else style="margin-right: 8px" type="primary" @click="$router.push('/my-analytics')">我的分析</el-button>
             <el-button style="margin-right: 8px" @click="refreshAll">刷新数据</el-button>
             <el-button type="danger" plain @click="logout">退出登录</el-button>
@@ -665,6 +685,21 @@ onMounted(async () => {
               <div class="summary-note">消息中心支持公告与订单提醒</div>
             </article>
           </section>
+
+          <el-card v-if="isAdmin" class="section-card" shadow="never">
+            <el-row justify="space-between" align="middle" :gutter="12">
+              <el-col :span="18">
+                <h3 class="section-title" style="margin: 0">全校能耗 Top10 楼栋（最近30天）</h3>
+              </el-col>
+              <el-col :span="6" style="text-align: right">
+                <el-button size="small" type="primary" plain @click="$router.push('/energy-analytics')">查看完整能耗分析</el-button>
+              </el-col>
+            </el-row>
+            <div style="margin-top: 12px">
+              <SimpleBarChart v-if="topBuildingsChart.length" title="消费金额（元）" :items="topBuildingsChart" color="#e67e22" />
+              <el-empty v-else description="暂无能耗数据" :image-size="80" />
+            </div>
+          </el-card>
 
           <el-card class="section-card" shadow="never">
             <el-tabs v-model="activeTab">

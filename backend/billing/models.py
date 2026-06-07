@@ -117,8 +117,16 @@ class ConsumptionRecord(models.Model):
     unit_price = models.DecimalField(max_digits=12, decimal_places=2)
     cost_amount = models.DecimalField(max_digits=12, decimal_places=2)
     meter_value = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
-    building = models.CharField(max_length=64, blank=True, default='', db_index=True, help_text='楼栋')
-    room = models.CharField(max_length=32, blank=True, default='', db_index=True, help_text='房间号')
+    building = models.CharField(max_length=64, blank=True, default='', db_index=True, help_text='楼栋（冗余）')
+    room = models.CharField(max_length=32, blank=True, default='', db_index=True, help_text='房间号（冗余）')
+    room_fk = models.ForeignKey(
+        'housing.Room',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='consumptions',
+        help_text='关联房间',
+    )
     operator = models.CharField(max_length=64)
     remark = models.CharField(max_length=255, blank=True)
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)

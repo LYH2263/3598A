@@ -12,6 +12,7 @@ from billing.models import (
     RechargeRecord,
     Wallet,
 )
+from housing.models import Room, StayRecord
 from notices.services import NotificationService
 
 
@@ -321,6 +322,16 @@ class LedgerService:
         return wallet
 
     @staticmethod
+    def _infer_room_for_user(user) -> Room | None:
+        active_stay = StayRecord.objects.filter(
+            user=user,
+            status=StayRecord.STATUS_ACTIVE,
+        ).select_related('bed__room').first()
+        if active_stay:
+            return active_stay.bed.room
+        return None
+
+    @staticmethod
     @transaction.atomic
     def create_consumption(
         user,
@@ -332,6 +343,7 @@ class LedgerService:
         channel: str = ConsumptionRecord.CHANNEL_MANUAL,
         building: str = '',
         room: str = '',
+        room_id: int | None = None,
         remark: str = '',
     ):
         usage = LedgerService._money(usage)
@@ -347,6 +359,18 @@ class LedgerService:
         if wallet.balance < cost_amount:
             raise ValidationError('余额不足，请先充值。')
 
+        room_obj = None
+        if room_id:
+            room_obj = Room.objects.filter(id=room_id, is_active=True).first()
+        if not room_obj:
+            room_obj = LedgerService._infer_room_for_user(user)
+
+        resolved_building = building
+        resolved_room_no = room
+        if room_obj:
+            resolved_building = room_obj.floor.building.name
+            resolved_room_no = room_obj.room_no
+
         balance_before = wallet.balance
         wallet.balance = LedgerService._money(wallet.balance - cost_amount)
         wallet.save(update_fields=['balance', 'updated_at'])
@@ -359,8 +383,9 @@ class LedgerService:
             unit_price=unit_price,
             cost_amount=cost_amount,
             meter_value=meter_value,
-            building=building,
-            room=room,
+            building=resolved_building,
+            room=resolved_room_no,
+            room_fk=room_obj,
             operator=operator,
             remark=remark,
         )

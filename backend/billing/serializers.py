@@ -69,6 +69,9 @@ class ConsumptionRecordSerializer(serializers.ModelSerializer):
     user_name = serializers.CharField(source='user.username', read_only=True)
     category_display = serializers.CharField(source='get_category_display', read_only=True)
     channel_display = serializers.CharField(source='get_channel_display', read_only=True)
+    room_id = serializers.IntegerField(source='room_fk_id', read_only=True, allow_null=True)
+    building_name = serializers.CharField(source='room_fk.floor.building.name', read_only=True, allow_null=True)
+    room_no = serializers.CharField(source='room_fk.room_no', read_only=True, allow_null=True)
 
     class Meta:
         model = ConsumptionRecord
@@ -86,11 +89,14 @@ class ConsumptionRecordSerializer(serializers.ModelSerializer):
             'meter_value',
             'building',
             'room',
+            'room_id',
+            'building_name',
+            'room_no',
             'operator',
             'remark',
             'created_at',
         )
-        read_only_fields = ('id', 'user_name', 'cost_amount', 'operator', 'created_at', 'category_display', 'channel_display')
+        read_only_fields = ('id', 'user_name', 'cost_amount', 'operator', 'created_at', 'category_display', 'channel_display', 'room_id', 'building_name', 'room_no')
 
 
 class BalanceChangeLogSerializer(serializers.ModelSerializer):
@@ -208,6 +214,7 @@ class ConsumptionCreateSerializer(serializers.Serializer):
     meter_value = serializers.DecimalField(max_digits=12, decimal_places=2, required=False)
     building = serializers.CharField(max_length=64, required=False, allow_blank=True, default='')
     room = serializers.CharField(max_length=32, required=False, allow_blank=True, default='')
+    room_id = serializers.IntegerField(required=False, allow_null=True, default=None)
     remark = serializers.CharField(max_length=255, required=False, allow_blank=True)
 
     def validate(self, attrs):
@@ -237,6 +244,7 @@ class ConsumptionCreateSerializer(serializers.Serializer):
             meter_value=meter_decimal,
             building=validated_data.get('building', ''),
             room=validated_data.get('room', ''),
+            room_id=validated_data.get('room_id'),
             operator=request.user.username,
             remark=validated_data.get('remark', ''),
         )

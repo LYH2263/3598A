@@ -56,6 +56,24 @@ const router = createRouter({
       component: () => import('../views/MyAnalyticsView.vue'),
       meta: { requiresAuth: true },
     },
+    {
+      path: '/building-management',
+      name: 'building-management',
+      component: () => import('../views/BuildingManagementView.vue'),
+      meta: { requiresAuth: true, requiresAdmin: true },
+    },
+    {
+      path: '/my-stay',
+      name: 'my-stay',
+      component: () => import('../views/MyStayView.vue'),
+      meta: { requiresAuth: true },
+    },
+    {
+      path: '/energy-analytics',
+      name: 'energy-analytics',
+      component: () => import('../views/EnergyAnalyticsView.vue'),
+      meta: { requiresAuth: true, requiresAdmin: true },
+    },
   ],
 })
 

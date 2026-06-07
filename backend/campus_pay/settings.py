@@ -23,6 +23,7 @@ INSTALLED_APPS = [
     'accounts',
     'billing',
     'notices',
+    'housing',
 ]
 
 MIDDLEWARE = [
