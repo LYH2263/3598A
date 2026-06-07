@@ -1,3 +1,4 @@
+import json
 from decimal import Decimal
 
 from django.contrib.auth.models import User
@@ -125,7 +126,7 @@ class ConsumptionRecord(models.Model):
     category = models.CharField(max_length=20, choices=CATEGORY_CHOICES)
     channel = models.CharField(max_length=30, choices=CHANNEL_CHOICES, default=CHANNEL_MANUAL, db_index=True)
     usage = models.DecimalField(max_digits=12, decimal_places=2)
-    unit_price = models.DecimalField(max_digits=12, decimal_places=2)
+    unit_price = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'), help_text='单价（保留字段，实际以 billing_detail 为准）')
     cost_amount = models.DecimalField(max_digits=12, decimal_places=2)
     meter_value = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     building = models.CharField(max_length=64, blank=True, default='', db_index=True, help_text='楼栋（冗余）')
@@ -140,6 +141,7 @@ class ConsumptionRecord(models.Model):
     )
     operator = models.CharField(max_length=64)
     remark = models.CharField(max_length=255, blank=True)
+    billing_detail = models.JSONField(default=dict, blank=True, help_text='计费明细：包含命中策略名、分段/时段构成等')
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
 
     class Meta:
@@ -453,3 +455,119 @@ class PlanExecution(models.Model):
 
     def __str__(self) -> str:
         return f'Plan#{self.plan_id} @ {self.scheduled_date} - {self.get_status_display()}'
+
+
+# ============= 价格策略中心 =============
+
+
+class PriceStrategy(models.Model):
+    TYPE_FIXED = 'fixed'
+    TYPE_TIERED = 'tiered'
+    TYPE_TIMESLOT = 'timeslot'
+
+    TYPE_CHOICES = [
+        (TYPE_FIXED, '固定单价'),
+        (TYPE_TIERED, '阶梯单价'),
+        (TYPE_TIMESLOT, '时段单价'),
+    ]
+
+    SCOPE_CAMPUS = 'campus'
+    SCOPE_BUILDING = 'building'
+    SCOPE_ROOM = 'room'
+    SCOPE_GLOBAL = 'global'
+
+    SCOPE_CHOICES = [
+        (SCOPE_GLOBAL, '全校默认'),
+        (SCOPE_CAMPUS, '校区'),
+        (SCOPE_BUILDING, '楼栋'),
+        (SCOPE_ROOM, '房间'),
+    ]
+
+    name = models.CharField(max_length=128, verbose_name='策略名称')
+    description = models.CharField(max_length=500, blank=True, default='', verbose_name='策略描述')
+    strategy_type = models.CharField(max_length=20, choices=TYPE_CHOICES, verbose_name='策略类型')
+    category = models.CharField(max_length=20, choices=ConsumptionRecord.CATEGORY_CHOICES, verbose_name='适用类目')
+    scope_type = models.CharField(max_length=20, choices=SCOPE_CHOICES, default=SCOPE_GLOBAL, verbose_name='生效维度')
+    campus = models.ForeignKey(
+        'housing.Campus', on_delete=models.CASCADE, null=True, blank=True, related_name='price_strategies', verbose_name='校区'
+    )
+    building = models.ForeignKey(
+        'housing.Building', on_delete=models.CASCADE, null=True, blank=True, related_name='price_strategies', verbose_name='楼栋'
+    )
+    room = models.ForeignKey(
+        'housing.Room', on_delete=models.CASCADE, null=True, blank=True, related_name='price_strategies', verbose_name='房间'
+    )
+    effective_from = models.DateField(verbose_name='生效开始日期')
+    effective_to = models.DateField(null=True, blank=True, verbose_name='生效结束日期（空表示长期）')
+    is_active = models.BooleanField(default=True, verbose_name='是否启用')
+    priority = models.IntegerField(default=0, help_text='数值越大优先级越高，同维度取优先级最高的策略')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'price_strategies'
+        ordering = ['-priority', '-effective_from']
+        indexes = [
+            models.Index(fields=['category', 'scope_type', 'is_active']),
+            models.Index(fields=['campus_id', 'category', 'is_active']),
+            models.Index(fields=['building_id', 'category', 'is_active']),
+            models.Index(fields=['room_id', 'category', 'is_active']),
+        ]
+        verbose_name = '价格策略'
+        verbose_name_plural = '价格策略'
+
+    def __str__(self) -> str:
+        return f'{self.name} ({self.get_strategy_type_display()} - {self.get_category_display()})'
+
+    def scope_label(self) -> str:
+        if self.scope_type == self.SCOPE_GLOBAL:
+            return '全校默认'
+        if self.scope_type == self.SCOPE_CAMPUS and self.campus:
+            return f'校区：{self.campus.name}'
+        if self.scope_type == self.SCOPE_BUILDING and self.building:
+            return f'楼栋：{self.building.name}'
+        if self.scope_type == self.SCOPE_ROOM and self.room:
+            return f'房间：{self.room.floor.building.name} - {self.room.room_no}'
+        return '未指定'
+
+
+class PriceTier(models.Model):
+    strategy = models.ForeignKey(PriceStrategy, on_delete=models.CASCADE, related_name='tiers', verbose_name='所属策略')
+    min_usage = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'), verbose_name='起始用量（含）')
+    max_usage = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, verbose_name='结束用量（不含，空表示不限）')
+    unit_price = models.DecimalField(max_digits=12, decimal_places=2, verbose_name='本档单价')
+    sort_order = models.IntegerField(default=0, verbose_name='排序')
+
+    class Meta:
+        db_table = 'price_tiers'
+        ordering = ['sort_order', 'min_usage']
+        verbose_name = '阶梯单价分段'
+        verbose_name_plural = '阶梯单价分段'
+
+    def __str__(self) -> str:
+        end = f'{self.max_usage}' if self.max_usage else '∞'
+        return f'{self.strategy.name}: [{self.min_usage}, {end}) @ {self.unit_price}'
+
+
+class PriceTimeSlot(models.Model):
+    strategy = models.ForeignKey(PriceStrategy, on_delete=models.CASCADE, related_name='timeslots', verbose_name='所属策略')
+    name = models.CharField(max_length=64, verbose_name='时段名称，如峰、平、谷')
+    weekday_mask = models.CharField(max_length=7, default='1111111', help_text='7 位二进制，周一到周日，1 表示适用')
+    start_time = models.TimeField(verbose_name='开始时间')
+    end_time = models.TimeField(verbose_name='结束时间')
+    unit_price = models.DecimalField(max_digits=12, decimal_places=2, verbose_name='此时段单价')
+    sort_order = models.IntegerField(default=0, verbose_name='排序')
+
+    class Meta:
+        db_table = 'price_timeslots'
+        ordering = ['sort_order', 'start_time']
+        verbose_name = '时段单价配置'
+        verbose_name_plural = '时段单价配置'
+
+    def __str__(self) -> str:
+        return f'{self.strategy.name}: {self.name} ({self.start_time}-{self.end_time}) @ {self.unit_price}'
+
+    def weekday_contains(self, weekday: int) -> bool:
+        if 0 <= weekday < 7 and len(self.weekday_mask) == 7:
+            return self.weekday_mask[weekday] == '1'
+        return True

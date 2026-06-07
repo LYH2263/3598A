@@ -22,6 +22,9 @@ from billing.views import (
     MonthlyStatementAdminDetailAPIView,
     MonthlyStatementAdminListAPIView,
     PlanUpcomingAPIView,
+    PricePreviewAPIView,
+    PriceStrategyDetailAPIView,
+    PriceStrategyListCreateAPIView,
     RechargeListCreateAPIView,
     RechargeOrderBatchReviewAPIView,
     RechargeOrderListCreateAPIView,
@@ -87,4 +90,9 @@ urlpatterns = [
     # ========= 管理员侧：充值计划管理 =========
     path('admin/plans/', AdminRechargePlanListAPIView.as_view(), name='admin-plans'),
     path('admin/plan-executions/', AdminPlanExecutionListAPIView.as_view(), name='admin-plan-executions'),
+
+    # ========= 价格策略中心 =========
+    path('pricing/strategies/', PriceStrategyListCreateAPIView.as_view(), name='pricing-strategies'),
+    path('pricing/strategies/<int:strategy_id>/', PriceStrategyDetailAPIView.as_view(), name='pricing-strategy-detail'),
+    path('pricing/preview/', PricePreviewAPIView.as_view(), name='pricing-preview'),
 ]

@@ -99,6 +99,12 @@ const router = createRouter({
       meta: { requiresAuth: true, requiresAdmin: true },
     },
     {
+      path: '/price-management',
+      name: 'price-management',
+      component: () => import('../views/PriceManagementView.vue'),
+      meta: { requiresAuth: true, requiresAdmin: true },
+    },
+    {
       path: '/my-tickets',
       name: 'my-tickets',
       component: () => import('../views/TicketStudentView.vue'),

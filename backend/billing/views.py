@@ -1,11 +1,13 @@
 import csv
 import io
 from datetime import datetime
+from decimal import Decimal
 
 from django.contrib.auth.models import User
 from django.db.models import Count, Sum
 from django.db.models.functions import TruncDate
 from django.http import HttpResponse
+from django.utils import timezone
 from rest_framework import permissions, status
 from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
@@ -19,6 +21,7 @@ from billing.models import (
     DashboardPreference,
     MonthlyStatement,
     PlanExecution,
+    PriceStrategy,
     RechargeOrder,
     RechargePlan,
     RechargeRecord,
@@ -38,6 +41,8 @@ from billing.serializers import (
     MonthlyStatementSerializer,
     PlanActionSerializer,
     PlanExecutionSerializer,
+    PricePreviewSerializer,
+    PriceStrategySerializer,
     RechargeCreateSerializer,
     RechargeOrderBatchReviewSerializer,
     RechargeOrderCreateSerializer,
@@ -56,6 +61,7 @@ from billing.serializers import (
 from billing.services.bi_analytics_service import BIAnalyticsService
 from billing.services.ledger_service import LedgerService
 from billing.services.monthly_closing_service import MonthlyClosingService
+from billing.services.pricing_service import PricingService
 from billing.services.recharge_plan_service import RechargePlanService
 
 
@@ -961,3 +967,89 @@ class AdminPlanExecutionListAPIView(APIView):
             queryset = queryset.filter(scheduled_date__lte=end_date)
 
         return Response(PlanExecutionSerializer(queryset[:500], many=True).data)
+
+
+# ============= 价格策略中心 =============
+
+
+class PriceStrategyListCreateAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsAdminRole]
+
+    def get(self, request):
+        queryset = PriceStrategy.objects.prefetch_related('tiers', 'timeslots').all()
+        category = request.query_params.get('category', '').strip()
+        scope_type = request.query_params.get('scope_type', '').strip()
+        is_active = request.query_params.get('is_active', '').strip()
+
+        if category:
+            queryset = queryset.filter(category=category)
+        if scope_type:
+            queryset = queryset.filter(scope_type=scope_type)
+        if is_active in ('true', 'false'):
+            queryset = queryset.filter(is_active=(is_active == 'true'))
+
+        return Response(PriceStrategySerializer(queryset.order_by('-priority', '-effective_from')[:500], many=True).data)
+
+    def post(self, request):
+        serializer = PriceStrategySerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        instance = serializer.save()
+        return Response(PriceStrategySerializer(instance).data, status=status.HTTP_201_CREATED)
+
+
+class PriceStrategyDetailAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsAdminRole]
+
+    def _get(self, strategy_id: int):
+        return PriceStrategy.objects.prefetch_related('tiers', 'timeslots').filter(id=strategy_id).first()
+
+    def get(self, request, strategy_id: int):
+        strategy = self._get(strategy_id)
+        if not strategy:
+            return Response({'detail': '价格策略不存在。'}, status=status.HTTP_404_NOT_FOUND)
+        return Response(PriceStrategySerializer(strategy).data)
+
+    def put(self, request, strategy_id: int):
+        strategy = self._get(strategy_id)
+        if not strategy:
+            return Response({'detail': '价格策略不存在。'}, status=status.HTTP_404_NOT_FOUND)
+        serializer = PriceStrategySerializer(strategy, data=request.data)
+        serializer.is_valid(raise_exception=True)
+        instance = serializer.save()
+        return Response(PriceStrategySerializer(instance).data)
+
+    def delete(self, request, strategy_id: int):
+        strategy = self._get(strategy_id)
+        if not strategy:
+            return Response({'detail': '价格策略不存在。'}, status=status.HTTP_404_NOT_FOUND)
+        strategy.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class PricePreviewAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def post(self, request):
+        serializer = PricePreviewSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        target_user = None
+        if data.get('user_id'):
+            target_user = User.objects.filter(id=data['user_id']).first()
+            if not target_user:
+                return Response({'detail': '用户不存在。'}, status=status.HTTP_400_BAD_REQUEST)
+        elif getattr(request.user.profile, 'role', '') != Profile.ROLE_ADMIN:
+            target_user = request.user
+
+        room = data.get('room')
+        at_time = data.get('at_time') or timezone.now()
+
+        result = PricingService.preview(
+            user=target_user,
+            category=data['category'],
+            usage=Decimal(data['usage']),
+            at_time=at_time,
+            room=room,
+        )
+        return Response(result.to_dict())

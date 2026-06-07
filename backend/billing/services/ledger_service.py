@@ -1,4 +1,5 @@
 from decimal import Decimal, ROUND_HALF_UP
+from datetime import datetime
 from uuid import uuid4
 
 from django.db import transaction
@@ -396,25 +397,31 @@ class LedgerService:
         room: str = '',
         room_id: int | None = None,
         remark: str = '',
+        cost_amount: Decimal | None = None,
+        billing_detail: dict | None = None,
+        at_time: datetime | None = None,
+        room_obj: Room | None = None,
     ):
         usage = LedgerService._money(usage)
         unit_price = LedgerService._money(unit_price)
-        if usage <= 0 or unit_price <= 0:
-            raise ValidationError('用量和单价必须大于 0。')
+        if usage <= 0:
+            raise ValidationError('用量必须大于 0。')
 
         wallet, _ = Wallet.objects.select_for_update().get_or_create(user=user)
         if wallet.is_frozen:
             raise ValidationError('账户已冻结，无法执行消费扣费。')
 
-        cost_amount = LedgerService._money(usage * unit_price)
-        if wallet.balance < cost_amount:
+        final_cost = LedgerService._money(cost_amount) if cost_amount is not None else LedgerService._money(usage * unit_price)
+        if final_cost <= 0:
+            raise ValidationError('计费金额必须大于 0。')
+        if wallet.balance < final_cost:
             raise ValidationError('余额不足，请先充值。')
 
-        room_obj = None
-        if room_id:
-            room_obj = Room.objects.filter(id=room_id, is_active=True).first()
-        if not room_obj:
-            room_obj = LedgerService._infer_room_for_user(user)
+        if room_obj is None:
+            if room_id:
+                room_obj = Room.objects.filter(id=room_id, is_active=True).first()
+            if not room_obj:
+                room_obj = LedgerService._infer_room_for_user(user)
 
         resolved_building = building
         resolved_room_no = room
@@ -423,28 +430,33 @@ class LedgerService:
             resolved_room_no = room_obj.room_no
 
         balance_before = wallet.balance
-        wallet.balance = LedgerService._money(wallet.balance - cost_amount)
+        wallet.balance = LedgerService._money(wallet.balance - final_cost)
         wallet.save(update_fields=['balance', 'updated_at'])
 
-        record = ConsumptionRecord.objects.create(
+        create_kwargs = dict(
             user=user,
             category=category,
             channel=channel,
             usage=usage,
             unit_price=unit_price,
-            cost_amount=cost_amount,
+            cost_amount=final_cost,
             meter_value=meter_value,
             building=resolved_building,
             room=resolved_room_no,
             room_fk=room_obj,
             operator=operator,
             remark=remark,
+            billing_detail=billing_detail or {},
         )
+        if at_time:
+            create_kwargs['created_at'] = at_time
+
+        record = ConsumptionRecord.objects.create(**create_kwargs)
 
         LedgerService._create_balance_log(
             wallet=wallet,
             change_type=BalanceChangeLog.TYPE_CONSUMPTION,
-            amount_delta=LedgerService._money(-cost_amount),
+            amount_delta=LedgerService._money(-final_cost),
             balance_before=balance_before,
             balance_after=wallet.balance,
             operator=operator,

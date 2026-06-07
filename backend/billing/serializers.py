@@ -10,6 +10,9 @@ from billing.models import (
     DashboardPreference,
     MonthlyStatement,
     PlanExecution,
+    PriceStrategy,
+    PriceTier,
+    PriceTimeSlot,
     RechargeOrder,
     RechargePlan,
     RechargeRecord,
@@ -18,7 +21,9 @@ from billing.models import (
     Wallet,
 )
 from billing.services.ledger_service import LedgerService
+from billing.services.pricing_service import PricingService
 from billing.services.recharge_plan_service import RechargePlanService
+from housing.models import Room
 
 
 class WalletSerializer(serializers.ModelSerializer):
@@ -104,9 +109,10 @@ class ConsumptionRecordSerializer(serializers.ModelSerializer):
             'room_no',
             'operator',
             'remark',
+            'billing_detail',
             'created_at',
         )
-        read_only_fields = ('id', 'user_name', 'cost_amount', 'operator', 'created_at', 'category_display', 'channel_display', 'room_id', 'building_name', 'room_no')
+        read_only_fields = ('id', 'user_name', 'cost_amount', 'operator', 'created_at', 'category_display', 'channel_display', 'room_id', 'building_name', 'room_no', 'billing_detail', 'unit_price')
 
 
 class BalanceChangeLogSerializer(serializers.ModelSerializer):
@@ -222,11 +228,11 @@ class ConsumptionCreateSerializer(serializers.Serializer):
     category = serializers.ChoiceField(choices=ConsumptionRecord.CATEGORY_CHOICES)
     channel = serializers.ChoiceField(choices=ConsumptionRecord.CHANNEL_CHOICES, required=False, default=ConsumptionRecord.CHANNEL_MANUAL)
     usage = serializers.DecimalField(max_digits=12, decimal_places=2)
-    unit_price = serializers.DecimalField(max_digits=12, decimal_places=2)
     meter_value = serializers.DecimalField(max_digits=12, decimal_places=2, required=False)
     building = serializers.CharField(max_length=64, required=False, allow_blank=True, default='')
     room = serializers.CharField(max_length=32, required=False, allow_blank=True, default='')
     room_id = serializers.IntegerField(required=False, allow_null=True, default=None)
+    created_at = serializers.DateTimeField(required=False, help_text='消费发生时间（用于回溯计费），不填则使用当前时间')
     remark = serializers.CharField(max_length=255, required=False, allow_blank=True)
 
     def validate(self, attrs):
@@ -240,25 +246,55 @@ class ConsumptionCreateSerializer(serializers.Serializer):
                 raise serializers.ValidationError({'user_id': '目标用户不存在。'})
 
         attrs['target_user'] = target_user
+
+        room_obj = None
+        if attrs.get('room_id'):
+            room_obj = Room.objects.filter(id=attrs['room_id'], is_active=True).first()
+            if room_obj is None:
+                raise serializers.ValidationError({'room_id': '指定的房间不存在。'})
+        attrs['room_obj'] = room_obj
+
         return attrs
 
     def create(self, validated_data):
         request = self.context['request']
         meter_value = validated_data.get('meter_value')
         meter_decimal = Decimal(meter_value) if meter_value is not None else None
+        at_time = validated_data.get('created_at')
+
+        billing_result = PricingService.calculate(
+            user=validated_data['target_user'],
+            category=validated_data['category'],
+            usage=Decimal(validated_data['usage']),
+            at_time=at_time,
+            room=validated_data.get('room_obj'),
+        )
+        if not billing_result.success:
+            raise serializers.ValidationError({'detail': billing_result.error or '计费计算失败。'})
+
+        billing_detail = billing_result.to_dict()
+        remark_parts = []
+        if validated_data.get('remark'):
+            remark_parts.append(validated_data['remark'])
+        remark_parts.append(billing_result.to_remark())
+        final_remark = '；'.join(remark_parts)
 
         return LedgerService.create_consumption(
             user=validated_data['target_user'],
             category=validated_data['category'],
             channel=validated_data.get('channel', ConsumptionRecord.CHANNEL_MANUAL),
             usage=Decimal(validated_data['usage']),
-            unit_price=Decimal(validated_data['unit_price']),
+            unit_price=billing_result.breakdown[0].unit_price if billing_result.breakdown else Decimal('0'),
+            cost_amount=billing_result.total_amount,
             meter_value=meter_decimal,
             building=validated_data.get('building', ''),
             room=validated_data.get('room', ''),
             room_id=validated_data.get('room_id'),
+            room_obj=validated_data.get('room_obj'),
             operator=request.user.username,
-            remark=validated_data.get('remark', ''),
+            remark=final_remark,
+            billing_detail=billing_detail,
+            at_time=at_time,
         )
 
 
@@ -559,3 +595,149 @@ class PlanExecutionSerializer(serializers.ModelSerializer):
             'created_at',
         )
         read_only_fields = fields
+
+
+# ============= 价格策略序列化器 =============
+
+
+class PriceTierSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PriceTier
+        fields = ('id', 'min_usage', 'max_usage', 'unit_price', 'sort_order')
+
+
+class PriceTimeSlotSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PriceTimeSlot
+        fields = ('id', 'name', 'weekday_mask', 'start_time', 'end_time', 'unit_price', 'sort_order')
+
+
+class PriceStrategySerializer(serializers.ModelSerializer):
+    strategy_type_display = serializers.CharField(source='get_strategy_type_display', read_only=True)
+    scope_type_display = serializers.CharField(source='get_scope_type_display', read_only=True)
+    category_display = serializers.CharField(source='get_category_display', read_only=True)
+    scope_label = serializers.CharField(read_only=True)
+    tiers = PriceTierSerializer(many=True, required=False, default=list)
+    timeslots = PriceTimeSlotSerializer(many=True, required=False, default=list)
+
+    class Meta:
+        model = PriceStrategy
+        fields = (
+            'id',
+            'name',
+            'description',
+            'strategy_type',
+            'strategy_type_display',
+            'category',
+            'category_display',
+            'scope_type',
+            'scope_type_display',
+            'scope_label',
+            'campus',
+            'building',
+            'room',
+            'effective_from',
+            'effective_to',
+            'is_active',
+            'priority',
+            'tiers',
+            'timeslots',
+            'created_at',
+            'updated_at',
+        )
+        read_only_fields = ('id', 'created_at', 'updated_at', 'strategy_type_display', 'scope_type_display', 'category_display', 'scope_label')
+
+    def validate(self, attrs):
+        scope_type = attrs.get('scope_type')
+        if scope_type == PriceStrategy.SCOPE_GLOBAL:
+            attrs['campus'] = None
+            attrs['building'] = None
+            attrs['room'] = None
+        elif scope_type == PriceStrategy.SCOPE_CAMPUS:
+            if not attrs.get('campus'):
+                raise serializers.ValidationError({'campus': '校区维度需指定校区。'})
+            attrs['building'] = None
+            attrs['room'] = None
+        elif scope_type == PriceStrategy.SCOPE_BUILDING:
+            if not attrs.get('building'):
+                raise serializers.ValidationError({'building': '楼栋维度需指定楼栋。'})
+            attrs['campus'] = attrs['building'].campus if attrs.get('building') else None
+            attrs['room'] = None
+        elif scope_type == PriceStrategy.SCOPE_ROOM:
+            if not attrs.get('room'):
+                raise serializers.ValidationError({'room': '房间维度需指定房间。'})
+            if attrs.get('room'):
+                attrs['building'] = attrs['room'].floor.building
+                attrs['campus'] = attrs['room'].floor.building.campus
+
+        strategy_type = attrs.get('strategy_type')
+        if strategy_type in (PriceStrategy.TYPE_FIXED, PriceStrategy.TYPE_TIERED):
+            tiers = attrs.get('tiers') or []
+            if not tiers:
+                raise serializers.ValidationError({'tiers': '固定/阶梯单价策略至少需要一个分段。'})
+            if strategy_type == PriceStrategy.TYPE_FIXED and len(tiers) != 1:
+                raise serializers.ValidationError({'tiers': '固定单价策略仅需一个分段。'})
+        elif strategy_type == PriceStrategy.TYPE_TIMESLOT:
+            slots = attrs.get('timeslots') or []
+            if not slots:
+                raise serializers.ValidationError({'timeslots': '时段单价策略至少需要一个时段。'})
+
+        if attrs.get('effective_to') and attrs['effective_to'] < attrs['effective_from']:
+            raise serializers.ValidationError({'effective_to': '生效结束日期不能早于开始日期。'})
+
+        return attrs
+
+    def _save_children(self, instance, validated_data):
+        tiers_data = validated_data.pop('tiers', None)
+        timeslots_data = validated_data.pop('timeslots', None)
+        if tiers_data is not None:
+            instance.tiers.all().delete()
+            for t in tiers_data:
+                PriceTier.objects.create(strategy=instance, **t)
+        if timeslots_data is not None:
+            instance.timeslots.all().delete()
+            for s in timeslots_data:
+                PriceTimeSlot.objects.create(strategy=instance, **s)
+
+    def create(self, validated_data):
+        self._save_children(None, validated_data)
+        tiers_data = validated_data.pop('tiers', [])
+        timeslots_data = validated_data.pop('timeslots', [])
+        instance = PriceStrategy.objects.create(**validated_data)
+        for t in tiers_data:
+            PriceTier.objects.create(strategy=instance, **t)
+        for s in timeslots_data:
+            PriceTimeSlot.objects.create(strategy=instance, **s)
+        return instance
+
+    def update(self, instance, validated_data):
+        tiers_data = validated_data.pop('tiers', None)
+        timeslots_data = validated_data.pop('timeslots', None)
+        for k, v in validated_data.items():
+            setattr(instance, k, v)
+        instance.save()
+        if tiers_data is not None:
+            instance.tiers.all().delete()
+            for t in tiers_data:
+                PriceTier.objects.create(strategy=instance, **t)
+        if timeslots_data is not None:
+            instance.timeslots.all().delete()
+            for s in timeslots_data:
+                PriceTimeSlot.objects.create(strategy=instance, **s)
+        return instance
+
+
+class PricePreviewSerializer(serializers.Serializer):
+    user_id = serializers.IntegerField(required=False, allow_null=True)
+    room_id = serializers.IntegerField(required=False, allow_null=True)
+    category = serializers.ChoiceField(choices=ConsumptionRecord.CATEGORY_CHOICES)
+    usage = serializers.DecimalField(max_digits=12, decimal_places=2)
+    at_time = serializers.DateTimeField(required=False, help_text='消费发生时间，不填则使用当前时间')
+
+    def validate(self, attrs):
+        if attrs.get('room_id'):
+            room = Room.objects.filter(id=attrs['room_id'], is_active=True).first()
+            if not room:
+                raise serializers.ValidationError({'room_id': '指定的房间不存在。'})
+            attrs['room'] = room
+        return attrs

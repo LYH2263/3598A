@@ -666,6 +666,18 @@ const topBuildingsChart = computed(() => {
   }))
 })
 
+const billingDetailVisible = ref(false)
+const selectedBillingDetail = ref(null)
+
+function openBillingDetail(row) {
+  selectedBillingDetail.value = row.billing_detail
+  billingDetailVisible.value = true
+}
+
+const weekDayMap = {
+  1: '周一', 2: '周二', 3: '周三', 4: '周四', 5: '周五', 6: '周六', 7: '周日',
+}
+
 async function refreshAll() {
   loading.value = true
   try {
@@ -723,6 +735,7 @@ onMounted(async () => {
             <el-button v-if="isAdmin" style="margin-right: 8px" type="primary" plain @click="$router.push('/ticket-workbench')">我的待办</el-button>
             <el-button v-if="isAdmin" style="margin-right: 8px" type="primary" @click="$router.push('/consumption-analytics')">消费分析</el-button>
             <el-button v-if="isAdmin" style="margin-right: 8px" type="primary" plain @click="$router.push('/plan-management')">计划管理</el-button>
+            <el-button v-if="isAdmin" style="margin-right: 8px" type="primary" plain @click="$router.push('/price-management')">价格管理</el-button>
             <el-button v-else style="margin-right: 8px" type="primary" plain @click="$router.push('/my-stay')">我的入住</el-button>
             <el-button v-else style="margin-right: 8px" type="primary" plain @click="$router.push('/my-coupons')">我的优惠券</el-button>
             <el-button v-else style="margin-right: 8px" type="primary" plain @click="$router.push('/my-plans')">我的计划</el-button>
@@ -1143,6 +1156,17 @@ onMounted(async () => {
                   </el-table-column>
                   <el-table-column prop="user_name" label="用户" min-width="120" />
                   <el-table-column prop="remark" label="备注" min-width="180" show-overflow-tooltip />
+                  <el-table-column label="操作" min-width="110" fixed="right">
+                    <template #default="{ row }">
+                      <el-button
+                        size="small"
+                        type="primary"
+                        plain
+                        :disabled="!row.billing_detail || !row.billing_detail.success"
+                        @click="openBillingDetail(row)"
+                      >计费明细</el-button>
+                    </template>
+                  </el-table-column>
                 </el-table>
               </el-tab-pane>
 
@@ -1514,5 +1538,84 @@ onMounted(async () => {
         </template>
       </el-skeleton>
     </section>
+
+    <!-- 计费明细弹窗 -->
+    <el-dialog v-model="billingDetailVisible" title="计费明细" width="640px">
+      <template v-if="selectedBillingDetail">
+        <el-descriptions :column="2" border style="margin-bottom: 16px">
+          <el-descriptions-item label="策略名称">
+            {{ selectedBillingDetail.strategy_name || '--' }}
+          </el-descriptions-item>
+          <el-descriptions-item label="生效维度">
+            {{ selectedBillingDetail.scope_label || '--' }}
+          </el-descriptions-item>
+          <el-descriptions-item label="策略类型">
+            {{ { fixed: '固定单价', tiered: '阶梯单价', timeslot: '时段单价' }[selectedBillingDetail.strategy_type] || selectedBillingDetail.strategy_type || '--' }}
+          </el-descriptions-item>
+          <el-descriptions-item label="消费类目">
+            {{ categoryMap[selectedBillingDetail.category] || selectedBillingDetail.category || '--' }}
+          </el-descriptions-item>
+          <el-descriptions-item label="总用量">
+            {{ formatMoney(selectedBillingDetail.total_usage) }}
+            <span v-if="selectedBillingDetail.category === 'water'">吨</span>
+            <span v-else-if="selectedBillingDetail.category === 'electricity'">度</span>
+          </el-descriptions-item>
+          <el-descriptions-item label="总金额">
+            <span style="color: var(--el-color-danger); font-weight: 600">¥ {{ formatMoney(selectedBillingDetail.total_amount) }}</span>
+          </el-descriptions-item>
+          <el-descriptions-item v-if="selectedBillingDetail.prior_monthly_usage !== undefined" label="当月累计用量（不含本次）" :span="2">
+            {{ formatMoney(selectedBillingDetail.prior_monthly_usage) }}
+          </el-descriptions-item>
+          <el-descriptions-item v-if="selectedBillingDetail.billed_at" label="计费时间" :span="2">
+            {{ formatDateTime(selectedBillingDetail.billed_at) }}
+          </el-descriptions-item>
+          <el-descriptions-item v-if="!selectedBillingDetail.success" label="错误信息" :span="2">
+            <span style="color: var(--el-color-danger)">{{ selectedBillingDetail.error_message || '计费失败' }}</span>
+          </el-descriptions-item>
+        </el-descriptions>
+
+        <h4 style="margin: 0 0 10px; font-weight: 600">计费构成</h4>
+        <el-table :data="selectedBillingDetail.breakdown || []" stripe border size="small" empty-text="无计费分段明细">
+          <el-table-column prop="label" label="分段/时段" min-width="160" />
+          <el-table-column label="用量" min-width="110">
+            <template #default="{ row }">
+              {{ formatMoney(row.usage) }}
+              <span v-if="selectedBillingDetail.category === 'water'">吨</span>
+              <span v-else-if="selectedBillingDetail.category === 'electricity'">度</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="单价" min-width="110">
+            <template #default="{ row }">¥ {{ formatMoney(row.unit_price) }}
+              <span v-if="selectedBillingDetail.category === 'water'">/吨</span>
+              <span v-else-if="selectedBillingDetail.category === 'electricity'">/度</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="小计" min-width="110">
+            <template #default="{ row }">
+              <span style="font-weight: 600">¥ {{ formatMoney(row.amount) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column v-if="selectedBillingDetail.strategy_type === 'timeslot'" label="时段信息" min-width="180">
+            <template #default="{ row }">
+              <template v-if="row.start_usage !== undefined">
+                {{ weekDayMap[row.weekday] || '' }} {{ row.start_time || '' }}-{{ row.end_time || '' }}
+              </template>
+              <template v-else>--</template>
+            </template>
+          </el-table-column>
+          <el-table-column v-if="selectedBillingDetail.strategy_type === 'tiered'" label="阶梯范围" min-width="160">
+            <template #default="{ row }">
+              <template v-if="row.tier_start !== undefined">
+                [{{ formatMoney(row.tier_start) }}, {{ row.tier_end == null || row.tier_end === Infinity ? '∞' : formatMoney(row.tier_end) }})
+              </template>
+              <template v-else>--</template>
+            </template>
+          </el-table-column>
+        </el-table>
+      </template>
+      <template #footer>
+        <el-button type="primary" @click="billingDetailVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
   </main>
 </template>
