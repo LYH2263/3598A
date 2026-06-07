@@ -98,19 +98,39 @@ class ConsumptionRecord(models.Model):
         (CATEGORY_ELECTRICITY, '电费'),
     ]
 
+    CHANNEL_MANUAL = 'manual'
+    CHANNEL_IC_CARD = 'ic_card'
+    CHANNEL_ONLINE = 'online'
+    CHANNEL_METER = 'smart_meter'
+
+    CHANNEL_CHOICES = [
+        (CHANNEL_MANUAL, '人工录入'),
+        (CHANNEL_IC_CARD, '校园IC卡'),
+        (CHANNEL_ONLINE, '在线缴费'),
+        (CHANNEL_METER, '智能电表'),
+    ]
+
     user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='consumptions')
     category = models.CharField(max_length=20, choices=CATEGORY_CHOICES)
+    channel = models.CharField(max_length=30, choices=CHANNEL_CHOICES, default=CHANNEL_MANUAL, db_index=True)
     usage = models.DecimalField(max_digits=12, decimal_places=2)
     unit_price = models.DecimalField(max_digits=12, decimal_places=2)
     cost_amount = models.DecimalField(max_digits=12, decimal_places=2)
     meter_value = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    building = models.CharField(max_length=64, blank=True, default='', db_index=True, help_text='楼栋')
+    room = models.CharField(max_length=32, blank=True, default='', db_index=True, help_text='房间号')
     operator = models.CharField(max_length=64)
     remark = models.CharField(max_length=255, blank=True)
-    created_at = models.DateTimeField(auto_now_add=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
 
     class Meta:
         db_table = 'consumption_records'
         ordering = ['-created_at']
+        indexes = [
+            models.Index(fields=['category', 'created_at']),
+            models.Index(fields=['channel', 'created_at']),
+            models.Index(fields=['user', 'category', 'created_at']),
+        ]
 
 
 class BalanceChangeLog(models.Model):
@@ -262,3 +282,27 @@ class ReconciliationDiff(models.Model):
     class Meta:
         db_table = 'reconciliation_diffs'
         ordering = ['-created_at']
+
+
+class DashboardPreference(models.Model):
+    BOARD_ADMIN_BI = 'admin_bi'
+    BOARD_STUDENT_MY = 'student_my'
+
+    BOARD_CHOICES = [
+        (BOARD_ADMIN_BI, '管理员消费分析'),
+        (BOARD_STUDENT_MY, '学生我的分析'),
+    ]
+
+    user = models.ForeignKey(User, on_delete=models.CASCADE, related_name='dashboard_preferences')
+    board_key = models.CharField(max_length=40, choices=BOARD_CHOICES)
+    card_order = models.JSONField(default=list, help_text='卡片ID顺序列表')
+    collapsed_cards = models.JSONField(default=list, help_text='已折叠的卡片ID列表')
+    filters_snapshot = models.JSONField(default=dict, blank=True, help_text='上次使用的筛选条件快照')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = 'dashboard_preferences'
+        constraints = [
+            UniqueConstraint(fields=['user', 'board_key'], name='uniq_user_board_pref'),
+        ]

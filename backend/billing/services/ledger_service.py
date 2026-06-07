@@ -329,6 +329,9 @@ class LedgerService:
         unit_price: Decimal,
         meter_value: Decimal | None,
         operator: str,
+        channel: str = ConsumptionRecord.CHANNEL_MANUAL,
+        building: str = '',
+        room: str = '',
         remark: str = '',
     ):
         usage = LedgerService._money(usage)
@@ -351,10 +354,13 @@ class LedgerService:
         record = ConsumptionRecord.objects.create(
             user=user,
             category=category,
+            channel=channel,
             usage=usage,
             unit_price=unit_price,
             cost_amount=cost_amount,
             meter_value=meter_value,
+            building=building,
+            room=room,
             operator=operator,
             remark=remark,
         )

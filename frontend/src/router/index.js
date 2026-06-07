@@ -44,6 +44,18 @@ const router = createRouter({
       component: () => import('../views/MessageCenterView.vue'),
       meta: { requiresAuth: true, requiresAdmin: true },
     },
+    {
+      path: '/consumption-analytics',
+      name: 'consumption-analytics',
+      component: () => import('../views/ConsumptionAnalyticsView.vue'),
+      meta: { requiresAuth: true, requiresAdmin: true },
+    },
+    {
+      path: '/my-analytics',
+      name: 'my-analytics',
+      component: () => import('../views/MyAnalyticsView.vue'),
+      meta: { requiresAuth: true },
+    },
   ],
 })
 

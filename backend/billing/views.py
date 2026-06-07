@@ -15,6 +15,7 @@ from accounts.permissions import IsAdminRole
 from billing.models import (
     BalanceChangeLog,
     ConsumptionRecord,
+    DashboardPreference,
     MonthlyStatement,
     RechargeOrder,
     RechargeRecord,
@@ -23,10 +24,14 @@ from billing.models import (
     Wallet,
 )
 from billing.serializers import (
+    BIFilterSerializer,
+    BICompareSerializer,
     BalanceChangeLogSerializer,
     ConsumptionCreateSerializer,
     ConsumptionRecordSerializer,
     CrossMonthAdjustSerializer,
+    DashboardPreferenceSaveSerializer,
+    DashboardPreferenceSerializer,
     MonthlyStatementSerializer,
     RechargeCreateSerializer,
     RechargeOrderBatchReviewSerializer,
@@ -41,6 +46,7 @@ from billing.serializers import (
     WalletActionSerializer,
     WalletSerializer,
 )
+from billing.services.bi_analytics_service import BIAnalyticsService
 from billing.services.ledger_service import LedgerService
 from billing.services.monthly_closing_service import MonthlyClosingService
 
@@ -500,3 +506,320 @@ def _period_start_end(period: str):
     end = datetime(ny, nm, 1, 0, 0, 0)
     current_tz = tz.get_current_timezone()
     return current_tz.localize(start), current_tz.localize(end)
+
+
+def _parse_filters_from_request(request, serializer_class=BIFilterSerializer):
+    data = {}
+    for key in request.query_params:
+        val = request.query_params.getlist(key) if key.endswith('[]') or key in {
+            'user_ids', 'categories', 'channels', 'buildings', 'rooms'
+        } else request.query_params.get(key)
+        if key.endswith('[]'):
+            data[key[:-2]] = val
+        else:
+            data[key] = val
+    if isinstance(data.get('user_ids'), str):
+        data['user_ids'] = [int(x) for x in data['user_ids'].split(',') if x.strip()]
+    if isinstance(data.get('categories'), str):
+        data['categories'] = [x for x in data['categories'].split(',') if x.strip()]
+    if isinstance(data.get('channels'), str):
+        data['channels'] = [x for x in data['channels'].split(',') if x.strip()]
+    if isinstance(data.get('buildings'), str):
+        data['buildings'] = [x for x in data['buildings'].split(',') if x.strip()]
+    if isinstance(data.get('rooms'), str):
+        data['rooms'] = [x for x in data['rooms'].split(',') if x.strip()]
+    for k in list(data.keys()):
+        if data[k] in ('', None):
+            del data[k]
+    serializer = serializer_class(data=data)
+    serializer.is_valid(raise_exception=True)
+    return serializer.validated_data
+
+
+# ============= BI 分析（管理员/学生共用，权限内数据） =============
+
+class BIOverviewAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        filters = _parse_filters_from_request(request)
+        return Response({
+            'category': BIAnalyticsService.by_category(filters, request.user),
+            'trend': BIAnalyticsService.by_time_trend(
+                filters, request.user, filters.get('trend_granularity', 'day')
+            ),
+            'channel': BIAnalyticsService.by_channel(filters, request.user),
+            'top_students': BIAnalyticsService.top_students(
+                filters, request.user, filters.get('top_n', 10)
+            ),
+            'building_room': BIAnalyticsService.by_building_room(filters, request.user),
+            'time_period': BIAnalyticsService.by_time_period(filters, request.user),
+            'dimension_options': BIAnalyticsService.get_dimension_options(request.user),
+        })
+
+
+class BICategoryAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        filters = _parse_filters_from_request(request)
+        return Response(BIAnalyticsService.by_category(filters, request.user))
+
+
+class BITrendAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        filters = _parse_filters_from_request(request)
+        granularity = filters.get('trend_granularity', 'day')
+        return Response(BIAnalyticsService.by_time_trend(filters, request.user, granularity))
+
+
+class BIChannelAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        filters = _parse_filters_from_request(request)
+        return Response(BIAnalyticsService.by_channel(filters, request.user))
+
+
+class BITopStudentsAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsAdminRole]
+
+    def get(self, request):
+        filters = _parse_filters_from_request(request)
+        top_n = filters.get('top_n', 10)
+        return Response(BIAnalyticsService.top_students(filters, request.user, top_n))
+
+
+class BIBuildingRoomAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        filters = _parse_filters_from_request(request)
+        return Response(BIAnalyticsService.by_building_room(filters, request.user))
+
+
+class BITimePeriodAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        filters = _parse_filters_from_request(request)
+        return Response(BIAnalyticsService.by_time_period(filters, request.user))
+
+
+class BICompareAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        valid = _parse_filters_from_request(request, BICompareSerializer)
+        filters_a = {
+            'start_date': valid.get('start_date'),
+            'end_date': valid.get('end_date'),
+            'user_ids': valid.get('user_ids', []),
+            'categories': valid.get('categories', []),
+            'channels': valid.get('channels', []),
+            'min_amount': valid.get('min_amount'),
+            'max_amount': valid.get('max_amount'),
+            'buildings': valid.get('buildings', []),
+            'rooms': valid.get('rooms', []),
+        }
+        filters_b = {
+            'start_date': valid.get('compare_start_date'),
+            'end_date': valid.get('compare_end_date'),
+            'user_ids': valid.get('user_ids', []),
+            'categories': valid.get('categories', []),
+            'channels': valid.get('channels', []),
+            'min_amount': valid.get('min_amount'),
+            'max_amount': valid.get('max_amount'),
+            'buildings': valid.get('buildings', []),
+            'rooms': valid.get('rooms', []),
+        }
+        granularity = valid.get('trend_granularity', 'day')
+        return Response(
+            BIAnalyticsService.compare_periods(filters_a, filters_b, request.user, granularity)
+        )
+
+
+class BIDimensionOptionsAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        return Response(BIAnalyticsService.get_dimension_options(request.user))
+
+
+class BIExportCSVAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    VIEW_CHOICES = {
+        'category', 'trend', 'channel', 'top_students', 'building_room', 'time_period',
+    }
+
+    def get(self, request, view_name: str):
+        if view_name not in self.VIEW_CHOICES:
+            return Response({'detail': '未知的视图类型。'}, status=status.HTTP_400_BAD_REQUEST)
+
+        filters = _parse_filters_from_request(request)
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+
+        if view_name == 'category':
+            result = BIAnalyticsService.by_category(filters, request.user)
+            writer.writerow(['消费分类统计'])
+            writer.writerow(['类目', '消费金额(元)', '用量', '笔数', '平均金额(元)', '占比(%)'])
+            for row in result['data']:
+                writer.writerow([
+                    row['category_label'],
+                    f"{row['total_cost']:.2f}",
+                    f"{row['total_usage']:.2f}",
+                    row['count'],
+                    f"{row['avg_cost']:.2f}",
+                    f"{row['percentage']:.2f}",
+                ])
+            writer.writerow([])
+            writer.writerow(['合计', f"{result['summary']['grand_total']:.2f}", '', result['summary']['record_count'], '', '100.00'])
+            filename = f'category_stats'
+
+        elif view_name == 'trend':
+            granularity = filters.get('trend_granularity', 'day')
+            result = BIAnalyticsService.by_time_trend(filters, request.user, granularity)
+            writer.writerow([f'消费趋势（按{granularity}）'])
+            writer.writerow(['周期', '消费金额(元)', '水费(元)', '电费(元)', '用量', '笔数'])
+            for row in result['data']:
+                writer.writerow([
+                    row['period'],
+                    f"{row['total_cost']:.2f}",
+                    f"{row['water_cost']:.2f}",
+                    f"{row['electricity_cost']:.2f}",
+                    f"{row['total_usage']:.2f}",
+                    row['count'],
+                ])
+            writer.writerow([])
+            writer.writerow(['合计', f"{result['summary']['total_cost']:.2f}", '', '', f"{result['summary']['total_usage']:.2f}", result['summary']['record_count']])
+            filename = f'trend_{granularity}'
+
+        elif view_name == 'channel':
+            result = BIAnalyticsService.by_channel(filters, request.user)
+            writer.writerow(['消费渠道统计'])
+            writer.writerow(['渠道', '消费金额(元)', '用量', '笔数', '占比(%)'])
+            for row in result['data']:
+                writer.writerow([
+                    row['channel_label'],
+                    f"{row['total_cost']:.2f}",
+                    f"{row['total_usage']:.2f}",
+                    row['count'],
+                    f"{row['percentage']:.2f}",
+                ])
+            writer.writerow([])
+            writer.writerow(['合计', f"{result['summary']['grand_total']:.2f}", '', '', '100.00'])
+            filename = 'channel_stats'
+
+        elif view_name == 'top_students':
+            top_n = filters.get('top_n', 10)
+            result = BIAnalyticsService.top_students(filters, request.user, top_n)
+            writer.writerow([f'学生消费 Top {top_n}'])
+            writer.writerow(['排名', '用户ID', '用户名', '学号', '消费金额(元)', '水费(元)', '电费(元)', '用量', '笔数'])
+            for row in result['data']:
+                writer.writerow([
+                    row['rank'],
+                    row['user_id'],
+                    row['username'],
+                    row['student_id'],
+                    f"{row['total_cost']:.2f}",
+                    f"{row['water_cost']:.2f}",
+                    f"{row['electricity_cost']:.2f}",
+                    f"{row['total_usage']:.2f}",
+                    row['count'],
+                ])
+            filename = f'top_{top_n}_students'
+
+        elif view_name == 'building_room':
+            result = BIAnalyticsService.by_building_room(filters, request.user)
+            writer.writerow(['楼栋消费统计'])
+            writer.writerow(['楼栋', '消费金额(元)', '用量', '笔数', '涉及房间数'])
+            for row in result['buildings']:
+                writer.writerow([
+                    row['building'],
+                    f"{row['total_cost']:.2f}",
+                    f"{row['total_usage']:.2f}",
+                    row['count'],
+                    row['room_count'],
+                ])
+            writer.writerow([])
+            writer.writerow(['房间消费统计'])
+            writer.writerow(['楼栋', '房间', '消费金额(元)', '用量', '笔数'])
+            for row in result['rooms']:
+                writer.writerow([
+                    row['building'],
+                    row['room'],
+                    f"{row['total_cost']:.2f}",
+                    f"{row['total_usage']:.2f}",
+                    row['count'],
+                ])
+            filename = 'building_room_stats'
+
+        else:  # time_period
+            result = BIAnalyticsService.by_time_period(filters, request.user)
+            writer.writerow(['消费时段分布'])
+            writer.writerow(['时段', '消费金额(元)', '水费(元)', '电费(元)', '用量', '笔数', '占比(%)'])
+            for row in result['data']:
+                writer.writerow([
+                    row['period_label'],
+                    f"{row['total_cost']:.2f}",
+                    f"{row['water_cost']:.2f}",
+                    f"{row['electricity_cost']:.2f}",
+                    f"{row['total_usage']:.2f}",
+                    row['count'],
+                    f"{row['percentage']:.2f}",
+                ])
+            filename = 'time_period_stats'
+
+        response = HttpResponse(buf.getvalue(), content_type='text/csv; charset=utf-8-sig')
+        response['Content-Disposition'] = f'attachment; filename="bi_{filename}_{datetime.now().strftime("%Y%m%d")}.csv"'
+        return response
+
+
+# ============= 学生侧：我的分析 =============
+
+class StudentProfileAnalyticsAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        return Response(BIAnalyticsService.student_profile(request.user))
+
+
+# ============= 看板偏好 =============
+
+class DashboardPreferenceListAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        prefs = DashboardPreference.objects.filter(user=request.user)
+        return Response(DashboardPreferenceSerializer(prefs, many=True).data)
+
+
+class DashboardPreferenceDetailAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, board_key: str):
+        pref, _ = DashboardPreference.objects.get_or_create(
+            user=request.user,
+            board_key=board_key,
+        )
+        return Response(DashboardPreferenceSerializer(pref).data)
+
+    def put(self, request, board_key: str):
+        serializer = DashboardPreferenceSaveSerializer(data={**request.data, 'board_key': board_key})
+        serializer.is_valid(raise_exception=True)
+        data = serializer.validated_data
+
+        pref, created = DashboardPreference.objects.update_or_create(
+            user=request.user,
+            board_key=board_key,
+            defaults={
+                'card_order': data.get('card_order', []),
+                'collapsed_cards': data.get('collapsed_cards', []),
+                'filters_snapshot': data.get('filters_snapshot', {}),
+            },
+        )
+        return Response(DashboardPreferenceSerializer(pref).data, status=status.HTTP_200_OK if not created else status.HTTP_201_CREATED)

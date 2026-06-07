@@ -630,6 +630,8 @@ onMounted(async () => {
           <el-col :xs="24" :sm="6" style="text-align: right">
             <el-button style="margin-right: 8px" @click="$router.push('/notification-preferences')">通知偏好</el-button>
             <el-button v-if="isAdmin" style="margin-right: 8px" type="primary" plain @click="$router.push('/message-center')">消息中心</el-button>
+            <el-button v-if="isAdmin" style="margin-right: 8px" type="primary" @click="$router.push('/consumption-analytics')">消费分析</el-button>
+            <el-button v-else style="margin-right: 8px" type="primary" @click="$router.push('/my-analytics')">我的分析</el-button>
             <el-button style="margin-right: 8px" @click="refreshAll">刷新数据</el-button>
             <el-button type="danger" plain @click="logout">退出登录</el-button>
           </el-col>

@@ -7,6 +7,7 @@ from accounts.models import Profile
 from billing.models import (
     BalanceChangeLog,
     ConsumptionRecord,
+    DashboardPreference,
     MonthlyStatement,
     RechargeOrder,
     RechargeRecord,
@@ -66,6 +67,8 @@ class RechargeRecordSerializer(serializers.ModelSerializer):
 
 class ConsumptionRecordSerializer(serializers.ModelSerializer):
     user_name = serializers.CharField(source='user.username', read_only=True)
+    category_display = serializers.CharField(source='get_category_display', read_only=True)
+    channel_display = serializers.CharField(source='get_channel_display', read_only=True)
 
     class Meta:
         model = ConsumptionRecord
@@ -74,15 +77,20 @@ class ConsumptionRecordSerializer(serializers.ModelSerializer):
             'user',
             'user_name',
             'category',
+            'category_display',
+            'channel',
+            'channel_display',
             'usage',
             'unit_price',
             'cost_amount',
             'meter_value',
+            'building',
+            'room',
             'operator',
             'remark',
             'created_at',
         )
-        read_only_fields = ('id', 'user_name', 'cost_amount', 'operator', 'created_at')
+        read_only_fields = ('id', 'user_name', 'cost_amount', 'operator', 'created_at', 'category_display', 'channel_display')
 
 
 class BalanceChangeLogSerializer(serializers.ModelSerializer):
@@ -194,9 +202,12 @@ class RechargeOrderBatchReviewSerializer(serializers.Serializer):
 class ConsumptionCreateSerializer(serializers.Serializer):
     user_id = serializers.IntegerField(required=False)
     category = serializers.ChoiceField(choices=ConsumptionRecord.CATEGORY_CHOICES)
+    channel = serializers.ChoiceField(choices=ConsumptionRecord.CHANNEL_CHOICES, required=False, default=ConsumptionRecord.CHANNEL_MANUAL)
     usage = serializers.DecimalField(max_digits=12, decimal_places=2)
     unit_price = serializers.DecimalField(max_digits=12, decimal_places=2)
     meter_value = serializers.DecimalField(max_digits=12, decimal_places=2, required=False)
+    building = serializers.CharField(max_length=64, required=False, allow_blank=True, default='')
+    room = serializers.CharField(max_length=32, required=False, allow_blank=True, default='')
     remark = serializers.CharField(max_length=255, required=False, allow_blank=True)
 
     def validate(self, attrs):
@@ -220,9 +231,12 @@ class ConsumptionCreateSerializer(serializers.Serializer):
         return LedgerService.create_consumption(
             user=validated_data['target_user'],
             category=validated_data['category'],
+            channel=validated_data.get('channel', ConsumptionRecord.CHANNEL_MANUAL),
             usage=Decimal(validated_data['usage']),
             unit_price=Decimal(validated_data['unit_price']),
             meter_value=meter_decimal,
+            building=validated_data.get('building', ''),
+            room=validated_data.get('room', ''),
             operator=request.user.username,
             remark=validated_data.get('remark', ''),
         )
@@ -339,3 +353,59 @@ class ReconciliationDiffSerializer(serializers.ModelSerializer):
             'detail',
             'created_at',
         )
+
+
+class DashboardPreferenceSerializer(serializers.ModelSerializer):
+    board_key_display = serializers.CharField(source='get_board_key_display', read_only=True)
+
+    class Meta:
+        model = DashboardPreference
+        fields = (
+            'id',
+            'board_key',
+            'board_key_display',
+            'card_order',
+            'collapsed_cards',
+            'filters_snapshot',
+            'created_at',
+            'updated_at',
+        )
+        read_only_fields = ('id', 'board_key_display', 'created_at', 'updated_at')
+
+
+class DashboardPreferenceSaveSerializer(serializers.Serializer):
+    board_key = serializers.ChoiceField(choices=DashboardPreference.BOARD_CHOICES)
+    card_order = serializers.ListField(child=serializers.CharField(), required=False, default=list)
+    collapsed_cards = serializers.ListField(child=serializers.CharField(), required=False, default=list)
+    filters_snapshot = serializers.DictField(required=False, default=dict)
+
+
+class BIFilterSerializer(serializers.Serializer):
+    start_date = serializers.DateField(required=False, allow_null=True)
+    end_date = serializers.DateField(required=False, allow_null=True)
+    user_ids = serializers.ListField(child=serializers.IntegerField(), required=False, default=list)
+    categories = serializers.ListField(
+        child=serializers.ChoiceField(choices=ConsumptionRecord.CATEGORY_CHOICES),
+        required=False,
+        default=list,
+    )
+    channels = serializers.ListField(
+        child=serializers.ChoiceField(choices=ConsumptionRecord.CHANNEL_CHOICES),
+        required=False,
+        default=list,
+    )
+    min_amount = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
+    max_amount = serializers.DecimalField(max_digits=12, decimal_places=2, required=False, allow_null=True)
+    buildings = serializers.ListField(child=serializers.CharField(), required=False, default=list)
+    rooms = serializers.ListField(child=serializers.CharField(), required=False, default=list)
+    trend_granularity = serializers.ChoiceField(
+        choices=[('day', '日'), ('week', '周'), ('month', '月')],
+        required=False,
+        default='day',
+    )
+    top_n = serializers.IntegerField(min_value=1, max_value=100, required=False, default=10)
+
+
+class BICompareSerializer(BIFilterSerializer):
+    compare_start_date = serializers.DateField(required=False, allow_null=True)
+    compare_end_date = serializers.DateField(required=False, allow_null=True)
