@@ -26,7 +26,54 @@ const orderForm = reactive({
   amount: null,
   channel: 'alipay',
   submit_remark: '',
+  coupon_id: null,
 })
+
+const availableCoupons = ref([])
+const promoCalc = reactive({
+  original_amount: '0.00',
+  payable_amount: '0.00',
+  credited_amount: '0.00',
+  discount_amount: '0.00',
+  bonus_amount: '0.00',
+  stacking_policy: 'allow',
+  applied_promotions: [],
+  applied_coupon_id: null,
+  applied_coupon_name: '',
+  coupon_discount_amount: '0.00',
+  error: '',
+})
+let promoCalcTimer = null
+
+async function loadAvailableCoupons() {
+  try {
+    const { data } = await http.get('/marketing/user-coupons/available/')
+    availableCoupons.value = data
+  } catch (_e) {
+    availableCoupons.value = []
+  }
+}
+
+async function recalcPromotion() {
+  if (!orderForm.amount || Number(orderForm.amount) <= 0) {
+    Object.assign(promoCalc, {
+      original_amount: '0.00', payable_amount: '0.00', credited_amount: '0.00',
+      discount_amount: '0.00', bonus_amount: '0.00', stacking_policy: 'allow',
+      applied_promotions: [], applied_coupon_id: null, applied_coupon_name: '',
+      coupon_discount_amount: '0.00', error: '',
+    })
+    return
+  }
+  if (promoCalcTimer) clearTimeout(promoCalcTimer)
+  promoCalcTimer = setTimeout(async () => {
+    try {
+      const params = { amount: Number(orderForm.amount) }
+      if (orderForm.coupon_id) params.coupon_id = orderForm.coupon_id
+      const { data } = await http.get('/marketing/calculate/', { params })
+      Object.assign(promoCalc, data)
+    } catch (_e) { /* ignore */ }
+  }, 200)
+}
 
 const orderFilters = reactive({
   status: '',
@@ -246,6 +293,15 @@ function formatDateTime(value) {
   }).format(date)
 }
 
+function stackingPolicyText(policy) {
+  return {
+    allow: '活动与优惠券可同时使用',
+    exclusive: '活动与优惠券择优生效',
+    coupon_only: '仅优惠券生效',
+    promo_only: '仅活动生效',
+  }[policy] || policy
+}
+
 function consumeStatsForCategory() {
   return consumptionStats.category_stats.map((item) => ({
     label: categoryMap[item.category] || item.category,
@@ -281,11 +337,24 @@ async function submitRechargeOrder() {
 
   actionLoading.value = true
   try {
-    await http.post('/billing/recharge-orders/', orderForm)
+    const payload = {
+      amount: orderForm.amount,
+      channel: orderForm.channel,
+      submit_remark: orderForm.submit_remark,
+      coupon_id: orderForm.coupon_id || null,
+    }
+    await http.post('/billing/recharge-orders/', payload)
     ElNotification({ title: '订单已提交', message: '请等待管理员审核。', type: 'success' })
     orderForm.amount = null
     orderForm.submit_remark = ''
-    await Promise.all([loadOrders(), loadDashboard(), loadNotifications()])
+    orderForm.coupon_id = null
+    Object.assign(promoCalc, {
+      original_amount: '0.00', payable_amount: '0.00', credited_amount: '0.00',
+      discount_amount: '0.00', bonus_amount: '0.00', stacking_policy: 'allow',
+      applied_promotions: [], applied_coupon_id: null, applied_coupon_name: '',
+      coupon_discount_amount: '0.00', error: '',
+    })
+    await Promise.all([loadOrders(), loadDashboard(), loadNotifications(), loadAvailableCoupons()])
   } finally {
     actionLoading.value = false
   }
@@ -604,7 +673,7 @@ async function refreshAll() {
     if (isAdmin.value) {
       tasks.push(loadAdminUsers(), loadStatements(), loadSettlementRuns(), loadReconciliationDiffs(), loadTopBuildings())
     } else {
-      tasks.push(loadMyStatements())
+      tasks.push(loadMyStatements(), loadAvailableCoupons())
     }
     await Promise.all(tasks)
   } finally {
@@ -649,8 +718,10 @@ onMounted(async () => {
             <el-button v-if="isAdmin" style="margin-right: 8px" type="primary" plain @click="$router.push('/building-management')">楼宇管理</el-button>
             <el-button v-if="isAdmin" style="margin-right: 8px" type="primary" plain @click="$router.push('/energy-analytics')">能耗视图</el-button>
             <el-button v-if="isAdmin" style="margin-right: 8px" type="primary" plain @click="$router.push('/message-center')">消息中心</el-button>
+            <el-button v-if="isAdmin" style="margin-right: 8px" type="primary" plain @click="$router.push('/marketing-center')">营销中心</el-button>
             <el-button v-if="isAdmin" style="margin-right: 8px" type="primary" @click="$router.push('/consumption-analytics')">消费分析</el-button>
             <el-button v-else style="margin-right: 8px" type="primary" plain @click="$router.push('/my-stay')">我的入住</el-button>
+            <el-button v-else style="margin-right: 8px" type="primary" plain @click="$router.push('/my-coupons')">我的优惠券</el-button>
             <el-button v-else style="margin-right: 8px" type="primary" @click="$router.push('/my-analytics')">我的分析</el-button>
             <el-button style="margin-right: 8px" @click="refreshAll">刷新数据</el-button>
             <el-button type="danger" plain @click="logout">退出登录</el-button>
@@ -709,7 +780,7 @@ onMounted(async () => {
                     <h3 class="section-title">快速提交充值订单</h3>
                     <el-form label-position="top" @submit.prevent>
                       <el-form-item label="充值金额（元）">
-                        <el-input-number v-model="orderForm.amount" :min="0" :precision="2" :step="10" style="width: 100%" />
+                        <el-input-number v-model="orderForm.amount" :min="0" :precision="2" :step="10" style="width: 100%" @change="recalcPromotion" />
                       </el-form-item>
                       <el-form-item label="充值渠道">
                         <el-select v-model="orderForm.channel" style="width: 100%">
@@ -718,9 +789,48 @@ onMounted(async () => {
                           <el-option label="银行卡" value="bank" />
                         </el-select>
                       </el-form-item>
+                      <el-form-item label="选择优惠券">
+                        <el-select v-model="orderForm.coupon_id" :placeholder="availableCoupons.length ? '不使用优惠券' : '暂无可使用优惠券'" style="width: 100%" clearable @change="recalcPromotion">
+                          <el-option
+                            v-for="uc in availableCoupons"
+                            :key="uc.id"
+                            :label="uc.coupon_detail?.coupon_type === 'fixed' ? `满${Number(uc.coupon_detail.min_amount||0).toFixed(2)}减${Number(uc.coupon_detail.face_value).toFixed(2)}` : `${(Number(uc.coupon_detail.discount_rate)*10).toFixed(1)}折券` + (uc.coupon_detail?.name ? ` - ${uc.coupon_detail.name}` : '')"
+                            :value="uc.id"
+                          />
+                        </el-select>
+                      </el-form-item>
                       <el-form-item label="备注">
                         <el-input v-model="orderForm.submit_remark" placeholder="请输入订单备注（可选）" />
                       </el-form-item>
+
+                      <el-descriptions v-if="orderForm.amount && Number(orderForm.amount) > 0" :column="1" border size="small" style="margin-bottom: 12px">
+                        <el-descriptions-item label="面值">{{ formatMoney(promoCalc.original_amount) }} 元</el-descriptions-item>
+                        <el-descriptions-item label="活动优惠" :span="1">
+                          <span style="color:#f56c6c">- {{ formatMoney(Number(promoCalc.discount_amount) - Number(promoCalc.coupon_discount_amount)) }} 元</span>
+                          <template v-if="promoCalc.applied_promotions && promoCalc.applied_promotions.length">
+                            <div style="font-size:12px;color:#909399;margin-top:4px">
+                              <div v-for="p in promoCalc.applied_promotions" :key="p.promotion_id">{{ p.promotion_name }}（{{ p.rule_display }}）</div>
+                            </div>
+                          </template>
+                        </el-descriptions-item>
+                        <el-descriptions-item label="优惠券优惠" v-if="promoCalc.applied_coupon_name || promoCalc.coupon_discount_amount > 0">
+                          <span style="color:#f56c6c">- {{ formatMoney(promoCalc.coupon_discount_amount) }} 元</span>
+                          <div style="font-size:12px;color:#909399;margin-top:4px" v-if="promoCalc.applied_coupon_name">{{ promoCalc.applied_coupon_name }}</div>
+                        </el-descriptions-item>
+                        <el-descriptions-item label="赠送金额">
+                          <span style="color:#67c23a">+ {{ formatMoney(promoCalc.bonus_amount) }} 元</span>
+                        </el-descriptions-item>
+                        <el-descriptions-item label="应付金额">
+                          <span style="font-weight:700;color:#e6a23c;font-size:16px">{{ formatMoney(promoCalc.payable_amount) }} 元</span>
+                        </el-descriptions-item>
+                        <el-descriptions-item label="到账金额">
+                          <span style="font-weight:700;color:#409eff;font-size:16px">{{ formatMoney(promoCalc.credited_amount) }} 元</span>
+                        </el-descriptions-item>
+                        <el-descriptions-item v-if="promoCalc.stacking_policy && promoCalc.stacking_policy !== 'allow'" label="叠加策略">
+                          {{ stackingPolicyText(promoCalc.stacking_policy) }}
+                        </el-descriptions-item>
+                      </el-descriptions>
+
                       <el-button type="primary" :loading="actionLoading" style="width: 100%" @click="submitRechargeOrder">提交充值订单</el-button>
                     </el-form>
                   </el-card>
@@ -788,8 +898,38 @@ onMounted(async () => {
                   <el-table-column v-if="isAdmin" type="selection" width="55" :selectable="(row) => row.status === 'pending'" />
                   <el-table-column prop="order_no" label="订单号" min-width="180" />
                   <el-table-column prop="user_name" label="用户" min-width="120" />
-                  <el-table-column label="金额" min-width="100">
+                  <el-table-column label="面值" min-width="90">
                     <template #default="{ row }">¥ {{ formatMoney(row.amount) }}</template>
+                  </el-table-column>
+                  <el-table-column label="应付" min-width="90">
+                    <template #default="{ row }">
+                      <span v-if="row.final_payable !== null && row.final_payable !== undefined">¥ {{ formatMoney(row.final_payable) }}</span>
+                      <span v-else>¥ {{ formatMoney(row.amount) }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="到账" min-width="90">
+                    <template #default="{ row }">
+                      <span style="color:#409eff;font-weight:600" v-if="row.final_credited !== null && row.final_credited !== undefined">¥ {{ formatMoney(row.final_credited) }}</span>
+                      <span v-else>¥ {{ formatMoney(row.amount) }}</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="优惠" min-width="90">
+                    <template #default="{ row }">
+                      <span v-if="Number(row.discount_amount || 0) > 0" style="color:#f56c6c">-¥{{ formatMoney(row.discount_amount) }}</span>
+                      <span v-else>-</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="赠送" min-width="90">
+                    <template #default="{ row }">
+                      <span v-if="Number(row.bonus_amount || 0) > 0" style="color:#67c23a">+¥{{ formatMoney(row.bonus_amount) }}</span>
+                      <span v-else>-</span>
+                    </template>
+                  </el-table-column>
+                  <el-table-column label="优惠券" min-width="110">
+                    <template #default="{ row }">
+                      <el-tag v-if="row.coupon_id" size="small" type="warning" effect="plain">已用券</el-tag>
+                      <span v-else>-</span>
+                    </template>
                   </el-table-column>
                   <el-table-column label="渠道" min-width="100">
                     <template #default="{ row }">{{ channelMap[row.channel] || row.channel }}</template>

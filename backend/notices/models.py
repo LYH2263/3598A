@@ -209,8 +209,8 @@ class MessageDeliveryLog(models.Model):
         db_table = 'message_delivery_logs'
         ordering = ['-created_at']
         indexes = [
-            models.Index(fields=['created_at']),
-            models.Index(fields=['status', 'channel']),
+            models.Index(fields=['created_at'], name='msgdlv_created_at_idx'),
+            models.Index(fields=['status', 'channel'], name='msgdlv_status_channel_idx'),
         ]
 
     def __str__(self) -> str:

@@ -43,6 +43,13 @@ class RechargeOrderSerializer(serializers.ModelSerializer):
             'reviewer_name',
             'reviewed_at',
             'created_at',
+            'coupon_id',
+            'applied_promotions',
+            'discount_amount',
+            'bonus_amount',
+            'stacking_policy',
+            'final_payable',
+            'final_credited',
         )
 
 
@@ -158,6 +165,7 @@ class RechargeOrderCreateSerializer(serializers.Serializer):
     amount = serializers.DecimalField(max_digits=12, decimal_places=2)
     channel = serializers.ChoiceField(choices=RechargeOrder.CHANNEL_CHOICES)
     submit_remark = serializers.CharField(max_length=255, required=False, allow_blank=True)
+    coupon_id = serializers.IntegerField(required=False, allow_null=True, default=None)
 
     def create(self, validated_data):
         request = self.context['request']
@@ -166,6 +174,7 @@ class RechargeOrderCreateSerializer(serializers.Serializer):
             amount=Decimal(validated_data['amount']),
             channel=validated_data['channel'],
             submit_remark=validated_data.get('submit_remark', ''),
+            coupon_id=validated_data.get('coupon_id'),
         )
 
 

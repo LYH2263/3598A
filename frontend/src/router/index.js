@@ -74,6 +74,18 @@ const router = createRouter({
       component: () => import('../views/EnergyAnalyticsView.vue'),
       meta: { requiresAuth: true, requiresAdmin: true },
     },
+    {
+      path: '/marketing-center',
+      name: 'marketing-center',
+      component: () => import('../views/MarketingCenterView.vue'),
+      meta: { requiresAuth: true, requiresAdmin: true },
+    },
+    {
+      path: '/my-coupons',
+      name: 'my-coupons',
+      component: () => import('../views/MyCouponsView.vue'),
+      meta: { requiresAuth: true },
+    },
   ],
 })
 

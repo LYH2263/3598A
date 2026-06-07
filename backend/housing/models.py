@@ -216,8 +216,8 @@ class StayRecord(models.Model):
         verbose_name = '入住记录'
         verbose_name_plural = '入住记录'
         indexes = [
-            models.Index(fields=['user', 'status']),
-            models.Index(fields=['bed', 'status']),
+            models.Index(fields=['user', 'status'], name='stay_user_status_idx'),
+            models.Index(fields=['bed', 'status'], name='stay_bed_status_idx'),
         ]
 
     def __str__(self) -> str:
@@ -267,7 +267,7 @@ class BedChangeLog(models.Model):
         verbose_name = '床位变更日志'
         verbose_name_plural = '床位变更日志'
         indexes = [
-            models.Index(fields=['user', 'change_type']),
+            models.Index(fields=['user', 'change_type'], name='bedchg_user_type_idx'),
         ]
 
     def __str__(self) -> str:

@@ -51,7 +51,7 @@ class LedgerService:
 
     @staticmethod
     @transaction.atomic
-    def create_recharge(user, amount: Decimal, channel: str, operator: str, remark: str = '', order=None):
+    def create_recharge(user, amount: Decimal, channel: str, operator: str, remark: str = '', order=None, bonus_amount: Decimal | None = None):
         amount = LedgerService._money(amount)
         if amount <= 0:
             raise ValidationError('充值金额必须大于 0。')
@@ -60,14 +60,17 @@ class LedgerService:
         if wallet.is_frozen:
             raise ValidationError('账户已冻结，无法执行充值入账。')
 
+        bonus = LedgerService._money(bonus_amount) if bonus_amount is not None else Decimal('0.00')
+        total_credit = LedgerService._money(amount + bonus)
+
         balance_before = wallet.balance
-        wallet.balance = LedgerService._money(wallet.balance + amount)
+        wallet.balance = LedgerService._money(wallet.balance + total_credit)
         wallet.save(update_fields=['balance', 'updated_at'])
 
         record = RechargeRecord.objects.create(
             user=user,
             order=order,
-            amount=amount,
+            amount=total_credit,
             channel=channel,
             operator=operator,
             remark=remark,
@@ -76,7 +79,7 @@ class LedgerService:
         LedgerService._create_balance_log(
             wallet=wallet,
             change_type=BalanceChangeLog.TYPE_RECHARGE,
-            amount_delta=amount,
+            amount_delta=total_credit,
             balance_before=balance_before,
             balance_after=wallet.balance,
             operator=operator,
@@ -88,7 +91,7 @@ class LedgerService:
 
     @staticmethod
     @transaction.atomic
-    def create_recharge_order(user, amount: Decimal, channel: str, submit_remark: str = ''):
+    def create_recharge_order(user, amount: Decimal, channel: str, submit_remark: str = '', coupon_id: int | None = None):
         amount = LedgerService._money(amount)
         if amount <= 0:
             raise ValidationError('充值金额必须大于 0。')
@@ -97,12 +100,24 @@ class LedgerService:
         if wallet.is_frozen:
             raise ValidationError('账户已冻结，无法提交充值订单。')
 
+        from marketing.services.promotion_engine import PromotionEngine
+        calc = PromotionEngine.calculate(user, amount, coupon_id)
+        if calc.error:
+            raise ValidationError(calc.error)
+
         return RechargeOrder.objects.create(
             user=user,
             order_no=LedgerService._next_order_no(),
             amount=amount,
             channel=channel,
             submit_remark=submit_remark,
+            coupon_id=calc.applied_coupon_id,
+            applied_promotions=[p.__dict__ for p in calc.applied_promotions],
+            discount_amount=calc.discount_amount,
+            bonus_amount=calc.bonus_amount,
+            stacking_policy=calc.stacking_policy,
+            final_payable=calc.payable_amount,
+            final_credited=calc.credited_amount,
         )
 
     @staticmethod
@@ -118,13 +133,31 @@ class LedgerService:
             raise ValidationError('非法审核动作。')
 
         if action == RechargeOrder.STATUS_APPROVED:
+            from marketing.services.promotion_engine import PromotionEngine
+            promo_remark, total_bonus, _total_discount = PromotionEngine.apply_on_approve(order, reviewer.username)
+
+            payable = order.final_payable if order.final_payable > 0 else order.amount
+            bonus = order.bonus_amount if order.bonus_amount else Decimal('0.00')
+            if total_bonus > 0:
+                bonus = total_bonus
+
+            remark_parts = []
+            if review_remark:
+                remark_parts.append(review_remark)
+            if promo_remark:
+                remark_parts.append(promo_remark)
+            if payable != order.amount:
+                remark_parts.append(f'订单原金额{order.amount}元，优惠券优惠后实付{payable}元')
+            final_remark = '；'.join(remark_parts) if remark_parts else '管理员审核通过充值订单'
+
             LedgerService.create_recharge(
                 user=order.user,
-                amount=order.amount,
+                amount=payable,
                 channel=order.channel,
                 operator=reviewer.username,
-                remark=review_remark or '管理员审核通过充值订单',
+                remark=final_remark,
                 order=order,
+                bonus_amount=bonus,
             )
             order.status = RechargeOrder.STATUS_APPROVED
         else:
@@ -193,13 +226,31 @@ class LedgerService:
                             'reason': f'对应用户账户已冻结（{frozen_reason}），无法入账。',
                         }
 
+                    from marketing.services.promotion_engine import PromotionEngine
+                    promo_remark, total_bonus, _td = PromotionEngine.apply_on_approve(order, reviewer.username)
+
+                    payable = order.final_payable if order.final_payable > 0 else order.amount
+                    bonus = order.bonus_amount if order.bonus_amount else Decimal('0.00')
+                    if total_bonus > 0:
+                        bonus = total_bonus
+
+                    remark_parts = []
+                    if review_remark:
+                        remark_parts.append(review_remark)
+                    if promo_remark:
+                        remark_parts.append(promo_remark)
+                    if payable != order.amount:
+                        remark_parts.append(f'订单原金额{order.amount}元，优惠券优惠后实付{payable}元')
+                    final_remark = '；'.join(remark_parts) if remark_parts else '管理员审核通过充值订单'
+
                     LedgerService.create_recharge(
                         user=order.user,
-                        amount=order.amount,
+                        amount=payable,
                         channel=order.channel,
                         operator=reviewer.username,
-                        remark=review_remark or '管理员审核通过充值订单',
+                        remark=final_remark,
                         order=order,
+                        bonus_amount=bonus,
                     )
                     order.status = RechargeOrder.STATUS_APPROVED
                 else:

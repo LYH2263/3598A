@@ -24,6 +24,7 @@ INSTALLED_APPS = [
     'billing',
     'notices',
     'housing',
+    'marketing',
 ]
 
 MIDDLEWARE = [
@@ -96,8 +97,8 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 CACHES = {
     'default': {
-        'BACKEND': 'django.core.cache.backends.filebased.FileBasedCache',
-        'LOCATION': '/tmp/label-3598-cache',
+        'BACKEND': 'django.core.cache.backends.locmem.LocMemCache',
+        'LOCATION': 'label-3598-cache',
     }
 }
 
@@ -167,6 +168,11 @@ LOGGING = {
             'propagate': False,
         },
         'notices': {
+            'handlers': ['console'],
+            'level': 'INFO',
+            'propagate': False,
+        },
+        'marketing': {
             'handlers': ['console'],
             'level': 'INFO',
             'propagate': False,

@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.contrib.auth.models import User
 from django.db import models
 from django.db.models import UniqueConstraint
@@ -53,6 +55,14 @@ class RechargeOrder(models.Model):
     reviewed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
+
+    coupon_id = models.IntegerField(null=True, blank=True, help_text='选择的用户优惠券ID')
+    applied_promotions = models.JSONField(default=list, blank=True, help_text='命中的营销活动明细 [{promotion_id, name, type, benefit_amount}]')
+    discount_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'), help_text='优惠券优惠金额')
+    bonus_amount = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'), help_text='活动赠送金额')
+    stacking_policy = models.CharField(max_length=30, blank=True, default='', help_text='实际采用的叠加策略快照')
+    final_payable = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'), help_text='学生实付金额（冗余，便于展示）')
+    final_credited = models.DecimalField(max_digits=12, decimal_places=2, default=Decimal('0.00'), help_text='最终到账金额（amount + bonus_amount - discount_amount 按规则落地）')
 
     class Meta:
         db_table = 'recharge_orders'
@@ -135,9 +145,9 @@ class ConsumptionRecord(models.Model):
         db_table = 'consumption_records'
         ordering = ['-created_at']
         indexes = [
-            models.Index(fields=['category', 'created_at']),
-            models.Index(fields=['channel', 'created_at']),
-            models.Index(fields=['user', 'category', 'created_at']),
+            models.Index(fields=['category', 'created_at'], name='consump_cat_created_idx'),
+            models.Index(fields=['channel', 'created_at'], name='consump_chn_created_idx'),
+            models.Index(fields=['user', 'category', 'created_at'], name='consump_user_cat_idx'),
         ]
 
 
@@ -179,7 +189,7 @@ class BalanceChangeLog(models.Model):
         db_table = 'balance_change_logs'
         ordering = ['-created_at']
         indexes = [
-            models.Index(fields=['user', 'settlement_period']),
+            models.Index(fields=['user', 'settlement_period'], name='bcl_user_settlement_period_idx'),
         ]
 
 
@@ -234,7 +244,7 @@ class MonthlyStatement(models.Model):
             UniqueConstraint(fields=['user', 'period'], name='uniq_user_period_statement'),
         ]
         indexes = [
-            models.Index(fields=['period', 'status']),
+            models.Index(fields=['period', 'status'], name='monthly_stmt_period_status_idx'),
         ]
 
     def __str__(self) -> str:
