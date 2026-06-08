@@ -700,7 +700,6 @@ class PriceStrategySerializer(serializers.ModelSerializer):
                 PriceTimeSlot.objects.create(strategy=instance, **s)
 
     def create(self, validated_data):
-        self._save_children(None, validated_data)
         tiers_data = validated_data.pop('tiers', [])
         timeslots_data = validated_data.pop('timeslots', [])
         instance = PriceStrategy.objects.create(**validated_data)
