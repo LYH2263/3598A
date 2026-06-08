@@ -256,6 +256,26 @@ const announcementForm = reactive({
   expires_at: '',
 })
 
+const announcementStatusFilter = ref('')
+const announcementStatusOptions = [
+  { value: '', label: '全部状态' },
+  { value: 'draft', label: '草稿' },
+  { value: 'scheduled', label: '待发布' },
+  { value: 'published', label: '已发布' },
+  { value: 'expired', label: '已失效' },
+]
+
+const announcementEditVisible = ref(false)
+const announcementEditLoading = ref(false)
+const editingAnnouncement = ref(null)
+const announcementEditForm = reactive({
+  title: '',
+  content: '',
+  is_active: true,
+  scheduled_at: '',
+  expires_at: '',
+})
+
 const announcementStatusMap = {
   draft: { label: '草稿', type: 'info' },
   scheduled: { label: '待发布', type: 'warning' },
@@ -622,9 +642,75 @@ function _downloadBlob(url, filename, mimeType) {
 }
 
 async function loadAnnouncements() {
-  const params = isAdmin.value ? { include_inactive: true } : {}
+  const params = {}
+  if (isAdmin.value) {
+    params.include_inactive = true
+    if (announcementStatusFilter.value) params.status = announcementStatusFilter.value
+  }
   const { data } = await http.get('/notices/announcements/', { params })
   announcements.value = data
+}
+
+function openAnnouncementEdit(row) {
+  editingAnnouncement.value = row
+  Object.assign(announcementEditForm, {
+    title: row.title,
+    content: row.content,
+    is_active: row.is_active,
+    scheduled_at: row.scheduled_at || '',
+    expires_at: row.expires_at || '',
+  })
+  announcementEditVisible.value = true
+}
+
+async function saveAnnouncementEdit() {
+  if (!announcementEditForm.title.trim() || !announcementEditForm.content.trim()) {
+    ElNotification({ title: '保存失败', message: '请填写公告标题和内容。', type: 'warning' })
+    return
+  }
+  announcementEditLoading.value = true
+  try {
+    const payload = {
+      title: announcementEditForm.title,
+      content: announcementEditForm.content,
+      is_active: announcementEditForm.is_active,
+      scheduled_at: announcementEditForm.scheduled_at || null,
+      expires_at: announcementEditForm.expires_at || null,
+    }
+    await http.patch(`/notices/announcements/${editingAnnouncement.value.id}/`, payload)
+    ElNotification({ title: '已保存', message: '公告修改已保存。', type: 'success' })
+    announcementEditVisible.value = false
+    await loadAnnouncements()
+  } finally {
+    announcementEditLoading.value = false
+  }
+}
+
+async function publishAnnouncementNow(row) {
+  try {
+    await ElMessageBox.confirm(`确认立即发布公告「${row.title}」并推送给所有用户？`, '发布确认', { type: 'warning' })
+    const { data } = await http.post(`/notices/announcements/${row.id}/publish/`)
+    ElNotification({ title: '已发布', message: `已推送给 ${data.push_count} 位用户。`, type: 'success' })
+    await loadAnnouncements()
+  } catch (_e) { /* user cancelled or handled */ }
+}
+
+async function takeAnnouncementOffline(row) {
+  try {
+    await ElMessageBox.confirm(`确认将公告「${row.title}」下线（设为失效）？学生端将不再可见。`, '下线确认', { type: 'warning' })
+    await http.post(`/notices/announcements/${row.id}/take-offline/`)
+    ElNotification({ title: '已下线', message: '公告已设为失效。', type: 'success' })
+    await loadAnnouncements()
+  } catch (_e) { /* user cancelled or handled */ }
+}
+
+async function deleteAnnouncement(row) {
+  try {
+    await ElMessageBox.confirm(`确认删除公告「${row.title}」？此操作不可恢复。`, '删除确认', { type: 'danger' })
+    await http.delete(`/notices/announcements/${row.id}/`)
+    ElNotification({ title: '已删除', message: '公告已删除。', type: 'success' })
+    await loadAnnouncements()
+  } catch (_e) { /* user cancelled or handled */ }
 }
 
 async function publishAnnouncement() {
@@ -1313,7 +1399,27 @@ onMounted(async () => {
 
                 <div class="table-grid" style="margin-top: 14px">
                   <el-card class="section-card" shadow="never">
-                    <h3 class="section-title">公告历史</h3>
+                    <el-row justify="space-between" align="middle" style="margin-bottom: 12px">
+                      <el-col>
+                        <h3 class="section-title" style="margin: 0">公告历史</h3>
+                      </el-col>
+                      <el-col v-if="isAdmin">
+                        <el-select
+                          v-model="announcementStatusFilter"
+                          placeholder="按状态筛选"
+                          style="width: 160px"
+                          clearable
+                          @change="loadAnnouncements"
+                        >
+                          <el-option
+                            v-for="opt in announcementStatusOptions"
+                            :key="opt.value"
+                            :label="opt.label"
+                            :value="opt.value"
+                          />
+                        </el-select>
+                      </el-col>
+                    </el-row>
                     <template v-if="isAdmin">
                       <el-table :data="announcements" stripe border empty-text="暂无公告">
                         <el-table-column prop="id" label="ID" width="70" />
@@ -1342,6 +1448,39 @@ onMounted(async () => {
                         </el-table-column>
                         <el-table-column label="发布时间" width="170">
                           <template #default="{ row }">{{ formatDateTime(row.published_at) }}</template>
+                        </el-table-column>
+                        <el-table-column label="操作" width="260" fixed="right">
+                          <template #default="{ row }">
+                            <el-space>
+                              <el-button
+                                size="small"
+                                type="primary"
+                                plain
+                                :disabled="row.status === 'expired'"
+                                @click="openAnnouncementEdit(row)"
+                              >编辑</el-button>
+                              <el-button
+                                v-if="row.status === 'draft' || row.status === 'scheduled'"
+                                size="small"
+                                type="success"
+                                plain
+                                @click="publishAnnouncementNow(row)"
+                              >发布</el-button>
+                              <el-button
+                                v-if="row.status !== 'expired'"
+                                size="small"
+                                type="warning"
+                                plain
+                                @click="takeAnnouncementOffline(row)"
+                              >下线</el-button>
+                              <el-button
+                                size="small"
+                                type="danger"
+                                plain
+                                @click="deleteAnnouncement(row)"
+                              >删除</el-button>
+                            </el-space>
+                          </template>
                         </el-table-column>
                       </el-table>
                     </template>
@@ -1779,6 +1918,50 @@ onMounted(async () => {
       </template>
       <template #footer>
         <el-button type="primary" @click="billingDetailVisible = false">关闭</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="announcementEditVisible" title="编辑公告" width="640px" :close-on-click-modal="false">
+      <el-form label-position="top">
+        <el-form-item label="公告标题">
+          <el-input v-model="announcementEditForm.title" placeholder="请输入公告标题" clearable />
+        </el-form-item>
+        <el-form-item label="公告内容">
+          <el-input v-model="announcementEditForm.content" type="textarea" :rows="4" placeholder="请输入公告内容" />
+        </el-form-item>
+        <el-row :gutter="12">
+          <el-col :span="8">
+            <el-form-item label="定时发布时间（可选）">
+              <el-date-picker
+                v-model="announcementEditForm.scheduled_at"
+                type="datetime"
+                value-format="YYYY-MM-DDTHH:mm:ss"
+                placeholder="留空表示立即发布"
+                style="width: 100%"
+                clearable
+              />
+            </el-form-item>
+          </el-col>
+          <el-col :span="8">
+            <el-form-item label="失效时间（可选）">
+              <el-date-picker
+                v-model="announcementEditForm.expires_at"
+                type="datetime"
+                value-format="YYYY-MM-DDTHH:mm:ss"
+                placeholder="留空表示永不失效"
+                style="width: 100%"
+                clearable
+              />
+            </el-form-item>
+          </el-col>
+          <el-col :span="8" style="display: flex; align-items: flex-end; padding-bottom: 18px">
+            <el-switch v-model="announcementEditForm.is_active" active-text="启用" inactive-text="草稿" />
+          </el-col>
+        </el-row>
+      </el-form>
+      <template #footer>
+        <el-button @click="announcementEditVisible = false">取消</el-button>
+        <el-button type="primary" :loading="announcementEditLoading" @click="saveAnnouncementEdit">保存修改</el-button>
       </template>
     </el-dialog>
   </main>

@@ -61,6 +61,32 @@ class Announcement(models.Model):
             return False
         return True
 
+    def can_publish(self):
+        if self.published:
+            return False
+        if self.expires_at and self.expires_at <= timezone.now():
+            return False
+        return True
+
+    def can_expire(self):
+        if self.expires_at and self.expires_at <= timezone.now():
+            return False
+        return self.published or (self.is_active and not self.published)
+
+    def publish_now(self):
+        if not self.can_publish():
+            return 0
+        self.is_active = True
+        self.scheduled_at = None
+        self.save(update_fields=['is_active', 'scheduled_at'])
+        from notices.services import NotificationService
+        return NotificationService.push_announcement(self)
+
+    def take_offline(self):
+        if not self.expires_at or self.expires_at > timezone.now():
+            self.expires_at = timezone.now()
+            self.save(update_fields=['expires_at'])
+
 
 class UserNotification(models.Model):
     TYPE_ANNOUNCEMENT = 'announcement'

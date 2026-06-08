@@ -57,6 +57,35 @@ class AnnouncementCreateSerializer(serializers.Serializer):
         )
 
 
+class AnnouncementUpdateSerializer(serializers.Serializer):
+    title = serializers.CharField(max_length=200, required=False)
+    content = serializers.CharField(max_length=4000, required=False)
+    is_active = serializers.BooleanField(required=False)
+    scheduled_at = serializers.DateTimeField(required=False, allow_null=True)
+    expires_at = serializers.DateTimeField(required=False, allow_null=True)
+
+    def validate(self, data):
+        scheduled_at = data.get('scheduled_at', self.instance.scheduled_at if self.instance else None)
+        expires_at = data.get('expires_at', self.instance.expires_at if self.instance else None)
+        if scheduled_at and expires_at and expires_at <= scheduled_at:
+            raise serializers.ValidationError('失效时间必须晚于定时发布时间。')
+        return data
+
+    def update(self, instance, validated_data):
+        if 'title' in validated_data:
+            instance.title = validated_data['title'].strip()
+        if 'content' in validated_data:
+            instance.content = validated_data['content'].strip()
+        if 'is_active' in validated_data:
+            instance.is_active = validated_data['is_active']
+        if 'scheduled_at' in validated_data:
+            instance.scheduled_at = validated_data['scheduled_at']
+        if 'expires_at' in validated_data:
+            instance.expires_at = validated_data['expires_at']
+        instance.save()
+        return instance
+
+
 class UserNotificationSerializer(serializers.ModelSerializer):
     notice_type_display = serializers.CharField(source='get_notice_type_display', read_only=True)
 

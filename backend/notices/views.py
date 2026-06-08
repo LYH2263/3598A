@@ -22,6 +22,7 @@ from notices.models import (
 from notices.serializers import (
     AnnouncementCreateSerializer,
     AnnouncementSerializer,
+    AnnouncementUpdateSerializer,
     MessageDeliveryLogSerializer,
     MessageTemplateSerializer,
     MessageTemplateWriteSerializer,
@@ -40,14 +41,39 @@ logger = logging.getLogger(__name__)
 class AnnouncementListCreateAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
+    def _filter_by_status(self, queryset, status_value):
+        now = timezone.now()
+        if status_value == Announcement.STATUS_DRAFT:
+            return queryset.filter(is_active=False)
+        if status_value == Announcement.STATUS_SCHEDULED:
+            return queryset.filter(
+                is_active=True,
+                published=False,
+            ).filter(
+                Q(expires_at__isnull=True) | Q(expires_at__gt=now)
+            )
+        if status_value == Announcement.STATUS_PUBLISHED:
+            return queryset.filter(
+                is_active=True,
+                published=True,
+            ).filter(
+                Q(expires_at__isnull=True) | Q(expires_at__gt=now)
+            )
+        if status_value == Announcement.STATUS_EXPIRED:
+            return queryset.filter(expires_at__lte=now)
+        return queryset
+
     def get(self, request):
         include_inactive = request.query_params.get('include_inactive', 'false') == 'true'
+        status_filter = request.query_params.get('status', '').strip()
         is_admin = getattr(request.user.profile, 'role', 'student') == 'admin'
         queryset = Announcement.objects.all()
 
         if is_admin:
             if not include_inactive:
                 queryset = queryset.filter(is_active=True)
+            if status_filter:
+                queryset = self._filter_by_status(queryset, status_filter)
         else:
             now = timezone.now()
             queryset = queryset.filter(
@@ -85,6 +111,77 @@ class AnnouncementListCreateAPIView(APIView):
             },
             status=status.HTTP_201_CREATED,
         )
+
+
+class AnnouncementDetailAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsAdminRole]
+
+    def _get(self, pk):
+        return Announcement.objects.filter(pk=pk).first()
+
+    def get(self, request, pk):
+        announcement = self._get(pk)
+        if not announcement:
+            return Response({'detail': '公告不存在。'}, status=status.HTTP_404_NOT_FOUND)
+        return Response(AnnouncementSerializer(announcement).data)
+
+    def patch(self, request, pk):
+        announcement = self._get(pk)
+        if not announcement:
+            return Response({'detail': '公告不存在。'}, status=status.HTTP_404_NOT_FOUND)
+        if announcement.status == Announcement.STATUS_EXPIRED:
+            return Response({'detail': '已失效的公告不能编辑。'}, status=status.HTTP_400_BAD_REQUEST)
+
+        serializer = AnnouncementUpdateSerializer(announcement, data=request.data, partial=True)
+        serializer.is_valid(raise_exception=True)
+        updated = serializer.save()
+        return Response(AnnouncementSerializer(updated).data)
+
+    def delete(self, request, pk):
+        announcement = self._get(pk)
+        if not announcement:
+            return Response({'detail': '公告不存在。'}, status=status.HTTP_404_NOT_FOUND)
+        announcement.delete()
+        logger.info('Announcement deleted by %s: id=%s, title=%s', request.user.username, pk, announcement.title)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class AnnouncementPublishAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsAdminRole]
+
+    def post(self, request, pk):
+        announcement = Announcement.objects.filter(pk=pk).first()
+        if not announcement:
+            return Response({'detail': '公告不存在。'}, status=status.HTTP_404_NOT_FOUND)
+        if not announcement.can_publish():
+            return Response({'detail': '该公告当前状态无法发布。'}, status=status.HTTP_400_BAD_REQUEST)
+
+        push_count = announcement.publish_now()
+        logger.info(
+            'Announcement manually published by %s: id=%s, pushed=%s',
+            request.user.username,
+            pk,
+            push_count,
+        )
+        return Response({
+            'announcement': AnnouncementSerializer(announcement).data,
+            'push_count': push_count,
+        })
+
+
+class AnnouncementTakeOfflineAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated, IsAdminRole]
+
+    def post(self, request, pk):
+        announcement = Announcement.objects.filter(pk=pk).first()
+        if not announcement:
+            return Response({'detail': '公告不存在。'}, status=status.HTTP_404_NOT_FOUND)
+        if announcement.status == Announcement.STATUS_EXPIRED:
+            return Response({'detail': '公告已处于失效状态。'}, status=status.HTTP_400_BAD_REQUEST)
+
+        announcement.take_offline()
+        logger.info('Announcement taken offline by %s: id=%s', request.user.username, pk)
+        return Response(AnnouncementSerializer(announcement).data)
 
 
 class NotificationListAPIView(APIView):

@@ -1,7 +1,10 @@
 from django.urls import path
 
 from notices.views import (
+    AnnouncementDetailAPIView,
     AnnouncementListCreateAPIView,
+    AnnouncementPublishAPIView,
+    AnnouncementTakeOfflineAPIView,
     DeliveryLogExportAPIView,
     DeliveryLogListAPIView,
     DeliveryLogRetryAPIView,
@@ -18,6 +21,9 @@ from notices.views import (
 
 urlpatterns = [
     path('announcements/', AnnouncementListCreateAPIView.as_view(), name='announcements'),
+    path('announcements/<int:pk>/', AnnouncementDetailAPIView.as_view(), name='announcement-detail'),
+    path('announcements/<int:pk>/publish/', AnnouncementPublishAPIView.as_view(), name='announcement-publish'),
+    path('announcements/<int:pk>/take-offline/', AnnouncementTakeOfflineAPIView.as_view(), name='announcement-take-offline'),
     path('notifications/', NotificationListAPIView.as_view(), name='notifications'),
     path('notifications/read/', NotificationReadAPIView.as_view(), name='notifications-read'),
 
