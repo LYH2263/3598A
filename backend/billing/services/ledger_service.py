@@ -2,7 +2,8 @@ from decimal import Decimal, ROUND_HALF_UP
 from datetime import datetime
 from uuid import uuid4
 
-from django.db import transaction, Q
+from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
@@ -113,7 +114,7 @@ class LedgerService:
             channel=channel,
             submit_remark=submit_remark,
             coupon_id=calc.applied_coupon_id,
-            applied_promotions=[p.__dict__ for p in calc.applied_promotions],
+            applied_promotions=calc.applied_promotions_to_list(),
             discount_amount=calc.discount_amount,
             bonus_amount=calc.bonus_amount,
             stacking_policy=calc.stacking_policy,

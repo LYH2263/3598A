@@ -35,6 +35,8 @@ class PromotionSerializer(serializers.ModelSerializer):
     limit_type_display = serializers.CharField(source='get_limit_type_display', read_only=True)
     stacking_policy_display = serializers.CharField(source='get_stacking_policy_display', read_only=True)
     created_by_name = serializers.CharField(source='created_by.username', read_only=True, allow_null=True)
+    status_label = serializers.CharField(read_only=True)
+    status_label_display = serializers.SerializerMethodField()
 
     class Meta:
         model = Promotion
@@ -45,6 +47,8 @@ class PromotionSerializer(serializers.ModelSerializer):
             'promotion_type',
             'promotion_type_display',
             'is_active',
+            'status_label',
+            'status_label_display',
             'start_time',
             'end_time',
             'audience_type',
@@ -62,7 +66,15 @@ class PromotionSerializer(serializers.ModelSerializer):
             'created_at',
             'updated_at',
         )
-        read_only_fields = ('id', 'created_by', 'created_at', 'updated_at')
+        read_only_fields = ('id', 'created_by', 'created_at', 'updated_at', 'status_label', 'status_label_display')
+
+    def get_status_label_display(self, obj) -> str:
+        return {
+            Promotion.STATUS_NOT_STARTED: '未开始',
+            Promotion.STATUS_ONGOING: '进行中',
+            Promotion.STATUS_ENDED: '已结束',
+            Promotion.STATUS_DISABLED: '已停用',
+        }.get(obj.status_label, obj.status_label)
 
     def validate(self, attrs):
         ptype = attrs.get('promotion_type')

@@ -3,6 +3,7 @@ from decimal import Decimal
 from django.contrib.auth.models import User
 from django.db import models
 from django.db.models import UniqueConstraint
+from django.utils import timezone
 
 
 class UserTag(models.Model):
@@ -101,6 +102,22 @@ class Promotion(models.Model):
     class Meta:
         db_table = 'mkt_promotions'
         ordering = ['-id']
+
+    STATUS_NOT_STARTED = 'not_started'
+    STATUS_ONGOING = 'ongoing'
+    STATUS_ENDED = 'ended'
+    STATUS_DISABLED = 'disabled'
+
+    @property
+    def status_label(self) -> str:
+        if not self.is_active:
+            return self.STATUS_DISABLED
+        now = timezone.now()
+        if now < self.start_time:
+            return self.STATUS_NOT_STARTED
+        if now > self.end_time:
+            return self.STATUS_ENDED
+        return self.STATUS_ONGOING
 
     def __str__(self) -> str:
         return f'{self.name}({self.get_promotion_type_display()})'

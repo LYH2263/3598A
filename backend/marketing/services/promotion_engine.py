@@ -55,6 +55,7 @@ class PromotionCalculationResult:
                     'type': p.promotion_type,
                     'benefit_amount': str(p.benefit_amount),
                     'description': p.description,
+                    'rule_display': p.description,
                 }
                 for p in self.applied_promotions
             ],
@@ -63,6 +64,19 @@ class PromotionCalculationResult:
             'coupon_discount_amount': str(self.coupon_discount_amount),
             'error': self.error,
         }
+
+    def applied_promotions_to_list(self) -> list[dict]:
+        return [
+            {
+                'promotion_id': p.promotion_id,
+                'name': p.name,
+                'promotion_type': p.promotion_type,
+                'benefit_amount': str(p.benefit_amount),
+                'description': p.description,
+                'rule_display': p.description,
+            }
+            for p in self.applied_promotions
+        ]
 
 
 class PromotionEngine:
@@ -106,27 +120,32 @@ class PromotionEngine:
             threshold = Decimal(str(cfg.get('threshold', '0')))
             bonus = Decimal(str(cfg.get('bonus', '0')))
             if amount >= threshold:
-                return bonus, f'充{threshold}送{bonus}'
+                return bonus, f'充{float(threshold):g}送{float(bonus):g}'
             return Decimal('0'), ''
         if promotion.promotion_type == Promotion.TYPE_DISCOUNT:
             threshold = Decimal(str(cfg.get('threshold', '0')))
             discount = Decimal(str(cfg.get('discount', '0')))
             if amount >= threshold:
-                return discount, f'满{threshold}减{discount}'
+                return discount, f'满{float(threshold):g}减{float(discount):g}'
             return Decimal('0'), ''
-        if promotion.promotion_type == Promotion.TIERED_CASHBACK:
+        if promotion.promotion_type == Promotion.TYPE_TIERED_CASHBACK:
             tiers = cfg.get('tiers', [])
             best_rate = Decimal('0')
-            best_desc = ''
+            best_threshold = Decimal('0')
             for tier in tiers:
-                t = Decimal(str(tier.get('threshold', '0')))
-                r = Decimal(str(tier.get('rate', '0')))
+                try:
+                    t = Decimal(str(tier.get('threshold', '0')))
+                    r = Decimal(str(tier.get('rate', '0')))
+                except Exception:
+                    continue
                 if amount >= t and r > best_rate:
                     best_rate = r
-                    best_desc = f'达{t}返{r*100:.0f}%'
+                    best_threshold = t
             if best_rate > 0:
                 cashback = PromotionEngine._money(amount * best_rate)
-                return cashback, best_desc
+                pct = float(best_rate * 100)
+                desc = f'达{float(best_threshold):g}返{pct:.0f}%（返现{float(cashback):g}元）'
+                return cashback, desc
             return Decimal('0'), ''
         return Decimal('0'), ''
 

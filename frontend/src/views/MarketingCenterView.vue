@@ -35,6 +35,13 @@ const stackingPolicyMap = {
   promo_only: '仅允许活动',
 }
 
+const promotionStatusMap = {
+  not_started: { label: '未开始', type: 'info' },
+  ongoing: { label: '进行中', type: 'success' },
+  ended: { label: '已结束', type: 'warning' },
+  disabled: { label: '已停用', type: 'danger' },
+}
+
 const couponTypeMap = {
   fixed: '固定面额',
   percent: '折扣券',
@@ -467,7 +474,14 @@ onMounted(async () => {
                 <el-table-column label="叠加策略" min-width="160">
                   <template #default="{ row }">{{ stackingPolicyMap[row.stacking_policy] }}</template>
                 </el-table-column>
-                <el-table-column label="状态" width="100">
+                <el-table-column label="状态" width="130">
+                  <template #default="{ row }">
+                    <el-tag :type="promotionStatusMap[row.status_label]?.type || 'info'" effect="plain">
+                      {{ row.status_label_display || promotionStatusMap[row.status_label]?.label || row.status_label }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="启用" width="90">
                   <template #default="{ row }">
                     <el-switch :model-value="row.is_active" @change="() => togglePromotion(row)" />
                   </template>
