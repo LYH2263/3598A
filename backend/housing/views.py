@@ -49,6 +49,23 @@ def _parse_filters(request, serializer_class=EnergyFilterSerializer):
         data['building_ids'] = [int(x) for x in data['building_ids'].split(',') if x.strip()]
     if isinstance(data.get('room_ids'), str):
         data['room_ids'] = [int(x) for x in data['room_ids'].split(',') if x.strip()]
+    if data.get('category') and not data.get('categories'):
+        data['categories'] = [data['category']]
+    if data.get('campus_id') and not data.get('campus_ids'):
+        try:
+            data['campus_ids'] = [int(data['campus_id'])]
+        except (TypeError, ValueError):
+            pass
+    if data.get('building_id') and not data.get('building_ids'):
+        try:
+            data['building_ids'] = [int(data['building_id'])]
+        except (TypeError, ValueError):
+            pass
+    if data.get('room_id') and not data.get('room_ids'):
+        try:
+            data['room_ids'] = [int(data['room_id'])]
+        except (TypeError, ValueError):
+            pass
     for k in list(data.keys()):
         if data[k] in ('', None):
             del data[k]

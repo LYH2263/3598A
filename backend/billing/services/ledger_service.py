@@ -2,7 +2,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from datetime import datetime
 from uuid import uuid4
 
-from django.db import transaction
+from django.db import transaction, Q
 from django.utils import timezone
 from rest_framework.exceptions import ValidationError
 
@@ -374,7 +374,17 @@ class LedgerService:
         return wallet
 
     @staticmethod
-    def _infer_room_for_user(user) -> Room | None:
+    def _infer_room_for_user(user, at_date=None) -> Room | None:
+        if at_date is None:
+            at_date = timezone.now().date()
+        stay = StayRecord.objects.filter(
+            user=user,
+            start_date__lte=at_date,
+        ).filter(
+            Q(end_date__gte=at_date) | Q(end_date__isnull=True)
+        ).select_related('bed__room').order_by('-start_date').first()
+        if stay:
+            return stay.bed.room
         active_stay = StayRecord.objects.filter(
             user=user,
             status=StayRecord.STATUS_ACTIVE,
@@ -421,7 +431,8 @@ class LedgerService:
             if room_id:
                 room_obj = Room.objects.filter(id=room_id, is_active=True).first()
             if not room_obj:
-                room_obj = LedgerService._infer_room_for_user(user)
+                infer_date = at_time.date() if at_time else None
+                room_obj = LedgerService._infer_room_for_user(user, at_date=infer_date)
 
         resolved_building = building
         resolved_room_no = room

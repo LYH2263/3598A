@@ -136,10 +136,20 @@ const buildingRankingChart = computed(() => {
 })
 
 const monthlyTrendChart = computed(() => {
-  return monthlyTrend.value.map((item) => ({
-    label: item.month || item.period || '--',
-    value: formatMoney(item.total_cost),
-  }))
+  const monthMap = {}
+  monthlyTrend.value.forEach((item) => {
+    const key = item.month || item.period || '--'
+    if (!monthMap[key]) {
+      monthMap[key] = 0
+    }
+    monthMap[key] += Number(item.total_cost || 0)
+  })
+  return Object.keys(monthMap)
+    .sort()
+    .map((month) => ({
+      label: month,
+      value: formatMoney(monthMap[month]),
+    }))
 })
 
 function handleSearch() {
@@ -334,13 +344,13 @@ onMounted(async () => {
                 <div class="summary-card">
                   <div class="summary-label">趋势统计</div>
                   <div class="summary-value">
-                    共 {{ monthlyTrend.length }} 个月份
+                    共 {{ monthlyTrendChart.length }} 个月份
                   </div>
                   <div class="summary-value">
                     总消费：¥ {{ formatMoney(monthlyTrend.reduce((sum, i) => sum + Number(i.total_cost || 0), 0)) }}
                   </div>
                   <div class="summary-value">
-                    月均消费：¥ {{ formatMoney(monthlyTrend.length ? monthlyTrend.reduce((sum, i) => sum + Number(i.total_cost || 0), 0) / monthlyTrend.length : 0) }}
+                    月均消费：¥ {{ formatMoney(monthlyTrendChart.length ? monthlyTrend.reduce((sum, i) => sum + Number(i.total_cost || 0), 0) / monthlyTrendChart.length : 0) }}
                   </div>
                 </div>
               </div>

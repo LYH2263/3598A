@@ -59,8 +59,10 @@ class EnergyAnalyticsService:
                 room_no=F('room_fk__room_no'),
                 building_id=F('room_fk__floor__building_id'),
                 building_name=F('room_fk__floor__building__name'),
+                campus_id=F('room_fk__floor__building__campus_id'),
+                campus_name=F('room_fk__floor__building__campus__name'),
             )
-            .values('room_id', 'room_no', 'building_id', 'building_name')
+            .values('room_id', 'room_no', 'building_id', 'building_name', 'campus_id', 'campus_name')
             .annotate(
                 total_cost=Sum('cost_amount'),
                 total_usage=Sum('usage'),
@@ -80,6 +82,8 @@ class EnergyAnalyticsService:
                 'room_no': row['room_no'],
                 'building_id': row['building_id'],
                 'building_name': row['building_name'],
+                'campus_id': row['campus_id'],
+                'campus_name': row['campus_name'],
                 'total_cost': float(row['total_cost'] or 0),
                 'total_usage': float(row['total_usage'] or 0),
                 'water_cost': float(row['water_cost'] or 0),
@@ -139,13 +143,27 @@ class EnergyAnalyticsService:
         qs = qs.filter(room_fk__isnull=False)
 
         if group_by == 'room':
-            qs = qs.annotate(group_id=F('room_fk_id'), group_name=F('room_fk__room_no'))
+            qs = qs.annotate(
+                group_id=F('room_fk_id'),
+                group_name=F('room_fk__room_no'),
+                building_id=F('room_fk__floor__building_id'),
+                building_name=F('room_fk__floor__building__name'),
+                campus_id=F('room_fk__floor__building__campus_id'),
+                campus_name=F('room_fk__floor__building__campus__name'),
+            )
         else:
-            qs = qs.annotate(group_id=F('room_fk__floor__building_id'), group_name=F('room_fk__floor__building__name'))
+            qs = qs.annotate(
+                group_id=F('room_fk__floor__building_id'),
+                group_name=F('room_fk__floor__building__name'),
+                building_id=F('room_fk__floor__building_id'),
+                building_name=F('room_fk__floor__building__name'),
+                campus_id=F('room_fk__floor__building__campus_id'),
+                campus_name=F('room_fk__floor__building__campus__name'),
+            )
 
         trend = (
             qs.annotate(month=TruncMonth('created_at'))
-            .values('group_id', 'group_name', 'month')
+            .values('group_id', 'group_name', 'month', 'building_id', 'building_name', 'campus_id', 'campus_name')
             .annotate(
                 total_cost=Sum('cost_amount'),
                 total_usage=Sum('usage'),
@@ -153,26 +171,27 @@ class EnergyAnalyticsService:
                 electricity_cost=Sum('cost_amount', filter=Q(category='electricity')),
                 count=Count('id'),
             )
-            .order_by('group_id', 'month')
+            .order_by('month', 'group_id')
         )
-        result = {}
+        data = []
         for row in trend:
-            gid = row['group_id']
-            if gid not in result:
-                result[gid] = {
-                    'group_id': gid,
-                    'group_name': row['group_name'],
-                    'data': [],
-                }
-            result[gid]['data'].append({
+            data.append({
                 'month': row['month'].strftime('%Y-%m') if row['month'] else '',
+                'period': row['month'].strftime('%Y-%m') if row['month'] else '',
+                'group_id': row['group_id'],
+                'group_name': row['group_name'],
+                'building_id': row['building_id'],
+                'building_name': row['building_name'],
+                'campus_id': row['campus_id'],
+                'campus_name': row['campus_name'],
+                'room_no': row['group_name'] if group_by == 'room' else '',
                 'total_cost': float(row['total_cost'] or 0),
                 'total_usage': float(row['total_usage'] or 0),
                 'water_cost': float(row['water_cost'] or 0),
                 'electricity_cost': float(row['electricity_cost'] or 0),
                 'count': row['count'],
             })
-        return list(result.values())
+        return data
 
     @staticmethod
     def dashboard_top_buildings(top_n: int = 10):
