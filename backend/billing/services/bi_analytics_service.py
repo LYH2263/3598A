@@ -22,6 +22,7 @@ from django.db.models import (
 from django.db.models.functions import (
     Cast,
     Coalesce,
+    ExtractDayOfWeek,
     ExtractHour,
     ExtractMonth,
     ExtractWeek,
@@ -133,6 +134,7 @@ class BIAnalyticsService:
             })
         return {
             'data': data,
+            'items': data,
             'summary': {
                 'grand_total': grand_total,
                 'category_count': len(data),
@@ -201,6 +203,7 @@ class BIAnalyticsService:
         return {
             'granularity': granularity,
             'data': data,
+            'items': data,
             'summary': {
                 'total_cost': BIAnalyticsService._decimal_to_float(totals['total_cost']),
                 'total_usage': BIAnalyticsService._decimal_to_float(totals['total_usage']),
@@ -237,6 +240,7 @@ class BIAnalyticsService:
             })
         return {
             'data': data,
+            'items': data,
             'summary': {
                 'grand_total': grand_total,
                 'channel_count': len(data),
@@ -281,6 +285,7 @@ class BIAnalyticsService:
         return {
             'top_n': top_n,
             'data': data,
+            'items': data,
         }
 
     @staticmethod
@@ -402,6 +407,7 @@ class BIAnalyticsService:
         peak_period = max(data, key=lambda x: x['total_cost']) if data else None
         return {
             'data': data,
+            'items': data,
             'summary': {
                 'grand_total': grand_total,
                 'peak_period': peak_period['period'] if peak_period else None,
@@ -457,6 +463,71 @@ class BIAnalyticsService:
             'growth_rate': BIAnalyticsService._calc_growth_rate(total_b, total_a),
             'count_growth_rate': BIAnalyticsService._calc_growth_rate(count_b, count_a),
             'comparison': comparison,
+        }
+
+    @staticmethod
+    def by_weekday(filters: dict, user: Optional[User] = None) -> dict:
+        qs = BIAnalyticsService._build_base_queryset(filters, user)
+
+        weekday_expr = ExtractDayOfWeek('created_at')
+
+        stats = list(
+            qs.annotate(weekday=weekday_expr)
+            .values('weekday')
+            .annotate(
+                total_cost=Coalesce(Sum('cost_amount'), Value(0)),
+                total_usage=Coalesce(Sum('usage'), Value(0)),
+                count=Count('id'),
+                water_cost=Coalesce(
+                    Sum(Case(When(category='water', then=F('cost_amount')), default=Value(0), output_field=DecimalField())),
+                    Value(0),
+                ),
+                electricity_cost=Coalesce(
+                    Sum(Case(When(category='electricity', then=F('cost_amount')), default=Value(0), output_field=DecimalField())),
+                    Value(0),
+                ),
+            )
+            .order_by('weekday')
+        )
+
+        weekday_labels = {
+            1: '周一',
+            2: '周二',
+            3: '周三',
+            4: '周四',
+            5: '周五',
+            6: '周六',
+            7: '周日',
+        }
+
+        grand_total = BIAnalyticsService._decimal_to_float(
+            qs.aggregate(total=Sum('cost_amount'))['total'] or 0
+        )
+        stats_map = {s['weekday']: s for s in stats}
+        data = []
+        for dow in range(1, 8):
+            item = stats_map.get(dow, {})
+            total = BIAnalyticsService._decimal_to_float(item.get('total_cost', 0))
+            data.append({
+                'weekday': dow,
+                'weekday_label': weekday_labels[dow],
+                'total_cost': total,
+                'total_usage': BIAnalyticsService._decimal_to_float(item.get('total_usage', 0)),
+                'count': item.get('count', 0),
+                'water_cost': BIAnalyticsService._decimal_to_float(item.get('water_cost', 0)),
+                'electricity_cost': BIAnalyticsService._decimal_to_float(item.get('electricity_cost', 0)),
+                'percentage': round(total / grand_total * 100, 2) if grand_total > 0 else 0,
+            })
+
+        peak = max(data, key=lambda x: x['total_cost']) if data else None
+        return {
+            'data': data,
+            'items': data,
+            'summary': {
+                'grand_total': grand_total,
+                'peak_weekday': peak['weekday'] if peak else None,
+                'peak_weekday_label': peak['weekday_label'] if peak else None,
+            },
         }
 
     @staticmethod

@@ -698,17 +698,25 @@ class BIOverviewAPIView(APIView):
 
     def get(self, request):
         filters = _parse_filters_from_request(request)
+        by_category = BIAnalyticsService.by_category(filters, request.user)
+        by_trend = BIAnalyticsService.by_time_trend(
+            filters, request.user, filters.get('trend_granularity', 'day')
+        )
+        by_channel = BIAnalyticsService.by_channel(filters, request.user)
+        top_res = BIAnalyticsService.top_students(
+            filters, request.user, filters.get('top_n', 10)
+        )
+        by_building_room = BIAnalyticsService.by_building_room(filters, request.user)
+        by_time_period = BIAnalyticsService.by_time_period(filters, request.user)
+        by_weekday = BIAnalyticsService.by_weekday(filters, request.user)
         return Response({
-            'category': BIAnalyticsService.by_category(filters, request.user),
-            'trend': BIAnalyticsService.by_time_trend(
-                filters, request.user, filters.get('trend_granularity', 'day')
-            ),
-            'channel': BIAnalyticsService.by_channel(filters, request.user),
-            'top_students': BIAnalyticsService.top_students(
-                filters, request.user, filters.get('top_n', 10)
-            ),
-            'building_room': BIAnalyticsService.by_building_room(filters, request.user),
-            'time_period': BIAnalyticsService.by_time_period(filters, request.user),
+            'by_category': by_category,
+            'by_trend': by_trend,
+            'by_channel': by_channel,
+            'top_students': top_res.get('data', []),
+            'by_building_room': by_building_room,
+            'by_time_period': by_time_period,
+            'by_weekday': by_weekday,
             'dimension_options': BIAnalyticsService.get_dimension_options(request.user),
         })
 
@@ -763,6 +771,14 @@ class BITimePeriodAPIView(APIView):
         return Response(BIAnalyticsService.by_time_period(filters, request.user))
 
 
+class BIWeekdayAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        filters = _parse_filters_from_request(request)
+        return Response(BIAnalyticsService.by_weekday(filters, request.user))
+
+
 class BICompareAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
@@ -807,10 +823,12 @@ class BIExportCSVAPIView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     VIEW_CHOICES = {
-        'category', 'trend', 'channel', 'top_students', 'building_room', 'time_period',
+        'category', 'trend', 'channel', 'top_students', 'building_room', 'time_period', 'weekday', 'my_profile',
     }
 
-    def get(self, request, view_name: str):
+    def get(self, request, view_name: str = ''):
+        if not view_name:
+            view_name = request.query_params.get('view', '')
         if view_name not in self.VIEW_CHOICES:
             return Response({'detail': '未知的视图类型。'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -913,7 +931,7 @@ class BIExportCSVAPIView(APIView):
                 ])
             filename = 'building_room_stats'
 
-        else:  # time_period
+        elif view_name == 'time_period':
             result = BIAnalyticsService.by_time_period(filters, request.user)
             writer.writerow(['消费时段分布'])
             writer.writerow(['时段', '消费金额(元)', '水费(元)', '电费(元)', '用量', '笔数', '占比(%)'])
@@ -928,6 +946,58 @@ class BIExportCSVAPIView(APIView):
                     f"{row['percentage']:.2f}",
                 ])
             filename = 'time_period_stats'
+
+        elif view_name == 'weekday':
+            result = BIAnalyticsService.by_weekday(filters, request.user)
+            writer.writerow(['按星期分布'])
+            writer.writerow(['星期', '消费金额(元)', '水费(元)', '电费(元)', '用量', '笔数', '占比(%)'])
+            for row in result['data']:
+                writer.writerow([
+                    row['weekday_label'],
+                    f"{row['total_cost']:.2f}",
+                    f"{row['water_cost']:.2f}",
+                    f"{row['electricity_cost']:.2f}",
+                    f"{row['total_usage']:.2f}",
+                    row['count'],
+                    f"{row['percentage']:.2f}",
+                ])
+            writer.writerow([])
+            writer.writerow(['合计', f"{result['summary']['grand_total']:.2f}", '', '', '', '', '100.00'])
+            filename = 'weekday_stats'
+
+        else:  # my_profile
+            result = BIAnalyticsService.student_profile(request.user)
+            writer.writerow(['我的消费分析'])
+            writer.writerow(['累计消费(元)', '月均消费(元)', '消费笔数', '高峰时段'])
+            writer.writerow([
+                f"{result['summary']['total_cost']:.2f}",
+                f"{result['summary']['avg_monthly_cost']:.2f}",
+                result['category_breakdown']['total_count'],
+                result.get('peak_period_label') or '',
+            ])
+            writer.writerow([])
+            writer.writerow(['类目占比'])
+            writer.writerow(['类目', '金额(元)', '占比(%)'])
+            writer.writerow([
+                '水费',
+                f"{result['category_breakdown']['water']['cost']:.2f}",
+                f"{result['category_breakdown']['water']['percentage']:.2f}",
+            ])
+            writer.writerow([
+                '电费',
+                f"{result['category_breakdown']['electricity']['cost']:.2f}",
+                f"{result['category_breakdown']['electricity']['percentage']:.2f}",
+            ])
+            writer.writerow([])
+            writer.writerow(['近6个月趋势'])
+            writer.writerow(['月份', '消费金额(元)', '笔数'])
+            for row in result['monthly_trend']:
+                writer.writerow([
+                    row.get('period', ''),
+                    f"{row['total_cost']:.2f}",
+                    row.get('count', 0),
+                ])
+            filename = 'my_analytics'
 
         response = HttpResponse(buf.getvalue(), content_type='text/csv; charset=utf-8-sig')
         response['Content-Disposition'] = f'attachment; filename="bi_{filename}_{datetime.now().strftime("%Y%m%d")}.csv"'

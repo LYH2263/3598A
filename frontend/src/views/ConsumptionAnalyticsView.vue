@@ -11,6 +11,7 @@ import ChannelChart from '../components/bi/ChannelChart.vue'
 import TopStudentsChart from '../components/bi/TopStudentsChart.vue'
 import BuildingRoomChart from '../components/bi/BuildingRoomChart.vue'
 import TimePeriodChart from '../components/bi/TimePeriodChart.vue'
+import WeekdayChart from '../components/bi/WeekdayChart.vue'
 
 import { useAuthStore } from '../stores/auth'
 import http from '../utils/http'
@@ -53,12 +54,14 @@ const biData = reactive({
   top_students: [],
   by_building_room: { buildings: [], rooms: [], summary: {} },
   by_time_period: { items: [], summary: {} },
+  by_weekday: { items: [], summary: {} },
   compare: null,
 })
 
 const defaultCardOrder = [
   'category',
   'trend',
+  'weekday',
   'channel',
   'time_period',
   'building_room',
@@ -68,6 +71,7 @@ const defaultCardOrder = [
 const cardConfig = {
   category: { title: '消费类目分布', exportView: 'category' },
   trend: { title: '消费时间趋势', exportView: 'trend' },
+  weekday: { title: '按星期分布', exportView: 'weekday' },
   channel: { title: '消费渠道分布', exportView: 'channel' },
   top_students: { title: `学生消费 Top N`, exportView: 'top_students' },
   building_room: { title: '楼栋/房间分布', exportView: 'building_room' },
@@ -110,6 +114,7 @@ async function loadOverview() {
       summary: data.by_building_room?.summary || {},
     }
     biData.by_time_period = { items: data.by_time_period?.items || [], summary: data.by_time_period?.summary || {} }
+    biData.by_weekday = { items: data.by_weekday?.items || [], summary: data.by_weekday?.summary || {} }
 
     if (filters.compare_enabled && filters.compare_start_date && filters.compare_end_date) {
       await loadCompare()
@@ -331,6 +336,11 @@ onMounted(async () => {
                 v-else-if="card.id === 'time_period'"
                 :data="biData.by_time_period.items"
                 :summary="biData.by_time_period.summary"
+              />
+              <WeekdayChart
+                v-else-if="card.id === 'weekday'"
+                :data="biData.by_weekday.items"
+                :summary="biData.by_weekday.summary"
               />
             </BICard>
           </div>

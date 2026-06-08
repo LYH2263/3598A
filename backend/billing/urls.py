@@ -13,6 +13,7 @@ from billing.views import (
     BITimePeriodAPIView,
     BITopStudentsAPIView,
     BITrendAPIView,
+    BIWeekdayAPIView,
     ConsumptionListCreateAPIView,
     ConsumptionStatsAPIView,
     CrossMonthAdjustAPIView,
@@ -72,9 +73,11 @@ urlpatterns = [
     path('bi/top-students/', BITopStudentsAPIView.as_view(), name='bi-top-students'),
     path('bi/building-room/', BIBuildingRoomAPIView.as_view(), name='bi-building-room'),
     path('bi/time-period/', BITimePeriodAPIView.as_view(), name='bi-time-period'),
+    path('bi/weekday/', BIWeekdayAPIView.as_view(), name='bi-weekday'),
     path('bi/compare/', BICompareAPIView.as_view(), name='bi-compare'),
     path('bi/dimensions/', BIDimensionOptionsAPIView.as_view(), name='bi-dimensions'),
     path('bi/export/<str:view_name>/', BIExportCSVAPIView.as_view(), name='bi-export'),
+    path('bi/export-csv/', BIExportCSVAPIView.as_view(), name='bi-export-csv'),
 
     # ========= 学生侧：我的分析 =========
     path('bi/my-profile/', StudentProfileAnalyticsAPIView.as_view(), name='bi-my-profile'),
