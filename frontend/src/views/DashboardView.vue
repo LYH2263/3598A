@@ -87,12 +87,38 @@ const batchReviewAction = ref('approved')
 const batchReviewRemark = ref('')
 const batchReviewLoading = ref(false)
 const batchReviewResult = ref(null)
+const batchReviewOnlyFailures = ref(false)
 
 const MAX_BATCH_SIZE = 50
 
 const pendingSelectedOrders = computed(() =>
   selectedOrders.value.filter((o) => o.status === 'pending')
 )
+
+const filteredBatchReviewResults = computed(() => {
+  if (!batchReviewResult.value) return []
+  return batchReviewOnlyFailures.value
+    ? batchReviewResult.value.results.filter((r) => !r.success)
+    : batchReviewResult.value.results
+})
+
+function copyFailedOrderNos() {
+  if (!batchReviewResult.value) return
+  const failed = batchReviewResult.value.results.filter((r) => !r.success)
+  if (failed.length === 0) {
+    ElNotification({ title: '无失败订单', message: '当前结果中没有失败的订单。', type: 'info' })
+    return
+  }
+  const text = failed.map((r) => r.order_no || `#${r.order_id}`).join('\n')
+  navigator.clipboard.writeText(text).then(
+    () => {
+      ElNotification({ title: '已复制', message: `已复制 ${failed.length} 条失败订单号到剪贴板。`, type: 'success' })
+    },
+    () => {
+      ElNotification({ title: '复制失败', message: '请手动复制。', type: 'error' })
+    }
+  )
+}
 
 function handleSelectionChange(selection) {
   selectedOrders.value = selection
@@ -126,6 +152,7 @@ function openBatchReview(action) {
   batchReviewAction.value = action
   batchReviewRemark.value = ''
   batchReviewResult.value = null
+  batchReviewOnlyFailures.value = false
   batchReviewVisible.value = true
 }
 
@@ -998,6 +1025,8 @@ onMounted(async () => {
                   v-model="batchReviewVisible"
                   :title="batchReviewAction === 'approved' ? '批量通过订单' : '批量驳回订单'"
                   width="640px"
+                  center
+                  append-to-body
                   :close-on-click-modal="false"
                   @close="closeBatchReviewDialog"
                 >
@@ -1029,6 +1058,9 @@ onMounted(async () => {
                         <el-table-column label="金额" width="100">
                           <template #default="{ row }">¥ {{ formatMoney(row.amount) }}</template>
                         </el-table-column>
+                        <el-table-column label="提交时间" min-width="165">
+                          <template #default="{ row }">{{ formatDateTime(row.created_at) }}</template>
+                        </el-table-column>
                       </el-table>
                       <div v-if="pendingSelectedOrders.length > 10" style="margin-top: 6px; color: var(--text-sub); font-size: 13px">
                         ... 还有 {{ pendingSelectedOrders.length - 10 }} 条订单未显示
@@ -1042,7 +1074,21 @@ onMounted(async () => {
                       :title="batchReviewResult.failure_count === 0 ? '全部处理成功' : '部分处理成功'"
                       :sub-title="`共 ${batchReviewResult.total} 条，成功 ${batchReviewResult.success_count} 条，失败 ${batchReviewResult.failure_count} 条`"
                     />
-                    <el-table v-if="batchReviewResult.results.length" :data="batchReviewResult.results" size="small" border max-height="320">
+                    <el-row justify="space-between" align="middle" style="margin: 8px 0 12px">
+                      <el-col>
+                        <el-checkbox v-model="batchReviewOnlyFailures">仅看失败项</el-checkbox>
+                      </el-col>
+                      <el-col style="text-align: right">
+                        <el-button
+                          size="small"
+                          :disabled="batchReviewResult.failure_count === 0"
+                          @click="copyFailedOrderNos"
+                        >
+                          复制失败订单号
+                        </el-button>
+                      </el-col>
+                    </el-row>
+                    <el-table v-if="filteredBatchReviewResults.length" :data="filteredBatchReviewResults" size="small" border max-height="320">
                       <el-table-column prop="order_no" label="订单号" min-width="160">
                         <template #default="{ row }">
                           {{ row.order_no || `#${row.order_id}` }}
@@ -1062,6 +1108,9 @@ onMounted(async () => {
                         </template>
                       </el-table-column>
                     </el-table>
+                    <div v-else-if="batchReviewOnlyFailures" style="text-align: center; padding: 20px 0; color: var(--text-sub)">
+                      当前筛选下无失败项
+                    </div>
                   </template>
 
                   <template #footer>
