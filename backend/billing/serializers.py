@@ -617,6 +617,8 @@ class PriceStrategySerializer(serializers.ModelSerializer):
     scope_type_display = serializers.CharField(source='get_scope_type_display', read_only=True)
     category_display = serializers.CharField(source='get_category_display', read_only=True)
     scope_label = serializers.CharField(read_only=True)
+    effective_status = serializers.CharField(read_only=True)
+    effective_status_label = serializers.CharField(read_only=True)
     tiers = PriceTierSerializer(many=True, required=False, default=list)
     timeslots = PriceTimeSlotSerializer(many=True, required=False, default=list)
 
@@ -639,13 +641,19 @@ class PriceStrategySerializer(serializers.ModelSerializer):
             'effective_from',
             'effective_to',
             'is_active',
+            'effective_status',
+            'effective_status_label',
             'priority',
             'tiers',
             'timeslots',
             'created_at',
             'updated_at',
         )
-        read_only_fields = ('id', 'created_at', 'updated_at', 'strategy_type_display', 'scope_type_display', 'category_display', 'scope_label')
+        read_only_fields = (
+            'id', 'created_at', 'updated_at',
+            'strategy_type_display', 'scope_type_display', 'category_display',
+            'scope_label', 'effective_status', 'effective_status_label',
+        )
 
     def validate(self, attrs):
         scope_type = attrs.get('scope_type')

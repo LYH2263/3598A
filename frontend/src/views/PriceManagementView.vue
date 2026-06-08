@@ -36,6 +36,13 @@ const scopeTypeMap = {
   room: '房间',
 }
 
+const effectiveStatusMap = {
+  active: { label: '生效中', type: 'success' },
+  pending: { label: '未生效', type: 'warning' },
+  expired: { label: '已过期', type: 'info' },
+  inactive: { label: '已停用', type: 'danger' },
+}
+
 const weekdayLabels = ['周一', '周二', '周三', '周四', '周五', '周六', '周日']
 
 function formatMoney(value) {
@@ -290,6 +297,19 @@ function buildSpaceOptions() {
   roomOptions.value = rooms
 }
 
+function displayCategory(cat) {
+  return categoryMap[cat] || cat
+}
+function displayUnit(cat) {
+  return cat === 'water' ? '吨' : (cat === 'electricity' ? '度' : '')
+}
+function resultTypeLabel(type) {
+  return strategyTypeMap[type]?.label || type
+}
+function resultTypeTagType(type) {
+  return strategyTypeMap[type]?.type || 'info'
+}
+
 async function runPreview() {
   if (!previewForm.usage || Number(previewForm.usage) <= 0) {
     ElMessage.warning('请输入有效用量')
@@ -301,6 +321,7 @@ async function runPreview() {
     const payload = {
       category: previewForm.category,
       usage: Number(previewForm.usage),
+      compare: true,
     }
     if (previewForm.user_id) payload.user_id = previewForm.user_id
     if (previewForm.room_id) payload.room_id = previewForm.room_id
@@ -398,10 +419,19 @@ onMounted(async () => {
                   </template>
                 </el-table-column>
                 <el-table-column prop="priority" label="优先级" width="80" />
-                <el-table-column label="状态" min-width="80">
+                <el-table-column label="启停" width="80">
                   <template #default="{ row }">
                     <el-tag :type="row.is_active ? 'success' : 'info'" size="small" effect="plain">
                       {{ row.is_active ? '启用' : '停用' }}
+                    </el-tag>
+                  </template>
+                </el-table-column>
+                <el-table-column label="生效状态" min-width="100">
+                  <template #default="{ row }">
+                    <el-tag
+                      :type="(effectiveStatusMap[row.effective_status] || effectiveStatusMap.inactive).type"
+                      size="small" effect="dark">
+                      {{ row.effective_status_label || (effectiveStatusMap[row.effective_status] || effectiveStatusMap.inactive).label }}
                     </el-tag>
                   </template>
                 </el-table-column>
@@ -477,40 +507,92 @@ onMounted(async () => {
 
               <el-skeleton :loading="previewLoading" animated :rows="4">
                 <template #default>
-                  <el-card v-if="previewResult" shadow="never">
+                  <template v-if="previewResult && previewResult.matched">
                     <el-alert
-                      :title="previewResult.success ? '计费计算成功' : '计费计算失败'"
-                      :type="previewResult.success ? 'success' : 'error'"
+                      :title="`当前命中策略：${previewResult.matched.strategy_name || '默认价格'}（${resultTypeLabel(previewResult.matched.strategy_type)}）`"
+                      :type="previewResult.matched.success ? 'success' : 'error'"
                       :closable="false"
                       show-icon
                       style="margin-bottom: 14px"
                     >
-                      <template v-if="previewResult.error">{{ previewResult.error }}</template>
+                      <template v-if="!previewResult.matched.success">
+                        {{ previewResult.matched.error_message || previewResult.matched.error }}
+                      </template>
                     </el-alert>
-                    <template v-if="previewResult.success">
-                      <el-descriptions :column="3" border style="margin-bottom: 14px">
-                        <el-descriptions-item label="命中策略">{{ previewResult.strategy_name || '--' }}</el-descriptions-item>
-                        <el-descriptions-item label="策略类型">{{ strategyTypeMap[previewResult.strategy_type]?.label || previewResult.strategy_type }}</el-descriptions-item>
-                        <el-descriptions-item label="生效维度">{{ previewResult.scope_label || '--' }}</el-descriptions-item>
-                        <el-descriptions-item label="总用量">{{ previewResult.total_usage }}</el-descriptions-item>
-                        <el-descriptions-item label="总金额">
-                          <b style="color: var(--el-color-primary); font-size: 16px">¥ {{ formatMoney(previewResult.total_amount) }}</b>
-                        </el-descriptions-item>
-                      </el-descriptions>
-                      <h4 style="margin: 0 0 8px">计费明细构成</h4>
-                      <el-table :data="previewResult.breakdown" stripe border>
-                        <el-table-column prop="label" label="分段/时段" min-width="200" />
-                        <el-table-column prop="usage" label="用量" min-width="120" />
-                        <el-table-column label="单价" min-width="120">
-                          <template #default="{ row }">¥ {{ formatMoney(row.unit_price) }}</template>
-                        </el-table-column>
-                        <el-table-column label="小计金额" min-width="140">
-                          <template #default="{ row }">¥ {{ formatMoney(row.amount) }}</template>
-                        </el-table-column>
-                      </el-table>
-                    </template>
-                  </el-card>
-                  <el-empty v-else description="请点击「计算预览」按钮查看结果" />
+
+                    <el-row :gutter="12">
+                      <el-col :span="8" v-for="key in ['fixed', 'tiered', 'timeslot']" :key="key">
+                        <el-card
+                          shadow="never"
+                          :body-style="{ padding: '12px' }"
+                          :style="{
+                            border: previewResult.matched.strategy_type === key
+                              ? '2px solid var(--el-color-primary)'
+                              : '1px solid var(--el-border-color-lighter)',
+                          }"
+                        >
+                          <template #header>
+                            <div style="display: flex; justify-content: space-between; align-items: center">
+                              <span style="font-weight: 600">{{ resultTypeLabel(key) }}试算</span>
+                              <el-tag
+                                v-if="previewResult.matched.strategy_type === key"
+                                type="primary" size="small" effect="dark">
+                                当前命中
+                              </el-tag>
+                              <el-tag
+                                v-else
+                                :type="resultTypeTagType(key)" size="small" effect="plain">
+                                参考对比
+                              </el-tag>
+                            </div>
+                          </template>
+                          <template v-if="previewResult[key] && previewResult[key].success">
+                            <el-descriptions :column="1" border size="small" style="margin-bottom: 10px">
+                              <el-descriptions-item label="策略">
+                                {{ previewResult[key].strategy_name || '--' }}
+                              </el-descriptions-item>
+                              <el-descriptions-item label="生效维度">
+                                {{ previewResult[key].scope_label || '--' }}
+                              </el-descriptions-item>
+                              <el-descriptions-item label="总用量">
+                                {{ formatMoney(previewResult[key].total_usage) }} {{ displayUnit(previewForm.category) }}
+                              </el-descriptions-item>
+                              <el-descriptions-item label="总金额">
+                                <span style="color: var(--el-color-danger); font-weight: 700; font-size: 16px">
+                                  ¥ {{ formatMoney(previewResult[key].total_amount) }}
+                                </span>
+                              </el-descriptions-item>
+                              <el-descriptions-item v-if="previewResult[key].prior_monthly_usage !== undefined" label="当月累计">
+                                {{ formatMoney(previewResult[key].prior_monthly_usage) }} {{ displayUnit(previewForm.category) }}
+                              </el-descriptions-item>
+                            </el-descriptions>
+                            <div style="font-size: 12px; color: var(--text-sub); margin-bottom: 4px">计费构成</div>
+                            <el-table :data="previewResult[key].breakdown || []" size="small" stripe border empty-text="无明细">
+                              <el-table-column prop="label" label="分段/时段" min-width="110" show-overflow-tooltip />
+                              <el-table-column label="用量" min-width="70">
+                                <template #default="{ row }">{{ formatMoney(row.usage) }}</template>
+                              </el-table-column>
+                              <el-table-column label="单价" min-width="70">
+                                <template #default="{ row }">¥{{ formatMoney(row.unit_price) }}</template>
+                              </el-table-column>
+                              <el-table-column label="小计" min-width="75">
+                                <template #default="{ row }">
+                                  <b>¥{{ formatMoney(row.amount) }}</b>
+                                </template>
+                              </el-table-column>
+                            </el-table>
+                          </template>
+                          <template v-else>
+                            <el-empty
+                              :description="previewResult[key]?.error_message || previewResult[key]?.error || '试算失败'"
+                              :image-size="60"
+                            />
+                          </template>
+                        </el-card>
+                      </el-col>
+                    </el-row>
+                  </template>
+                  <el-empty v-else description="请点击「计算预览」按钮查看三种计费方式对比结果" />
                 </template>
               </el-skeleton>
             </el-tab-pane>

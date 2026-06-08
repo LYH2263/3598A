@@ -531,6 +531,26 @@ class PriceStrategy(models.Model):
             return f'房间：{self.room.floor.building.name} - {self.room.room_no}'
         return '未指定'
 
+    def effective_status(self, today=None) -> str:
+        from django.utils import timezone as tz
+        today = today or tz.localdate()
+        if not self.is_active:
+            return 'inactive'
+        if self.effective_from > today:
+            return 'pending'
+        if self.effective_to and self.effective_to < today:
+            return 'expired'
+        return 'active'
+
+    def effective_status_label(self) -> str:
+        s = self.effective_status()
+        return {
+            'active': '生效中',
+            'pending': '未生效',
+            'expired': '已过期',
+            'inactive': '已停用',
+        }.get(s, s)
+
 
 class PriceTier(models.Model):
     strategy = models.ForeignKey(PriceStrategy, on_delete=models.CASCADE, related_name='tiers', verbose_name='所属策略')

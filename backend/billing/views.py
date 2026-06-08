@@ -1255,6 +1255,17 @@ class PricePreviewAPIView(APIView):
 
         room = data.get('room')
         at_time = data.get('at_time') or timezone.now()
+        compare_flag = str(request.data.get('compare', '')).lower() in ('1', 'true', 'yes', 'on')
+
+        if compare_flag:
+            result = PricingService.preview_compare(
+                user=target_user,
+                category=data['category'],
+                usage=Decimal(data['usage']),
+                at_time=at_time,
+                room=room,
+            )
+            return Response(result)
 
         result = PricingService.preview(
             user=target_user,
