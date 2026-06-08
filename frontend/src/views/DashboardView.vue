@@ -586,16 +586,38 @@ async function viewStatementDetail(period) {
 }
 
 function downloadStatementCSV(period) {
-  const url = `/billing/statements/${period}/csv/`
+  _downloadBlob(
+    `/billing/statements/${period}/csv/`,
+    `statement_${authStore.user?.username || 'me'}_${period}.csv`,
+    'text/csv;charset=utf-8-sig'
+  )
+}
+
+function downloadStatementPDF(period) {
+  _downloadBlob(
+    `/billing/statements/${period}/pdf/`,
+    `statement_${authStore.user?.username || 'me'}_${period}.pdf`,
+    'application/pdf'
+  )
+}
+
+function _downloadBlob(url, filename, mimeType) {
   http.get(url, { responseType: 'blob' }).then((res) => {
-    const blob = new Blob([res.data], { type: 'text/csv;charset=utf-8-sig' })
+    let blob = res.data
+    if (!(blob instanceof Blob)) {
+      blob = new Blob([blob], { type: mimeType })
+    } else if (!blob.type || blob.type === 'application/octet-stream') {
+      blob = new Blob([blob], { type: mimeType })
+    }
     const link = document.createElement('a')
     link.href = URL.createObjectURL(blob)
-    link.download = `statement_${authStore.user?.username || 'me'}_${period}.csv`
+    link.download = filename
+    document.body.appendChild(link)
     link.click()
-    URL.revokeObjectURL(link.href)
-  }).catch((e) => {
-    ElNotification({ title: '下载失败', message: e?.response?.data?.detail || String(e), type: 'error' })
+    document.body.removeChild(link)
+    setTimeout(() => URL.revokeObjectURL(link.href), 0)
+  }).catch(() => {
+    // error already shown by interceptor
   })
 }
 
@@ -1599,11 +1621,12 @@ onMounted(async () => {
                         </el-tag>
                       </template>
                     </el-table-column>
-                    <el-table-column label="操作" min-width="200" fixed="right">
+                    <el-table-column label="操作" min-width="260" fixed="right">
                       <template #default="{ row }">
                         <el-space>
                           <el-button size="small" type="primary" plain @click="viewStatementDetail(row.period)">查看明细</el-button>
                           <el-button size="small" type="success" :disabled="row.status !== 'published'" @click="downloadStatementCSV(row.period)">下载 CSV</el-button>
+                          <el-button size="small" type="warning" :disabled="row.status !== 'published'" @click="downloadStatementPDF(row.period)">下载 PDF</el-button>
                         </el-space>
                       </template>
                     </el-table-column>
@@ -1663,9 +1686,14 @@ onMounted(async () => {
                     <el-button @click="statementDetailVisible = false">关闭</el-button>
                     <el-button
                       v-if="statementDetail.statement?.status === 'published'"
-                      type="primary"
+                      type="success"
                       @click="() => downloadStatementCSV(selectedStatementPeriod)"
                     >下载 CSV</el-button>
+                    <el-button
+                      v-if="statementDetail.statement?.status === 'published'"
+                      type="warning"
+                      @click="() => downloadStatementPDF(selectedStatementPeriod)"
+                    >下载 PDF</el-button>
                   </template>
                 </el-dialog>
               </el-tab-pane>

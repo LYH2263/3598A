@@ -39,7 +39,23 @@ http.interceptors.response.use(
       }
     }
 
-    const message = error.response?.data?.detail || '请求失败，请稍后重试。'
+    let message = '请求失败，请稍后重试。'
+    const data = error.response?.data
+    if (data) {
+      if (data instanceof Blob) {
+        try {
+          const text = await data.text()
+          const parsed = JSON.parse(text)
+          message = parsed.detail || message
+        } catch {
+          message = '下载失败，请稍后重试。'
+        }
+      } else if (typeof data === 'object') {
+        message = data.detail || message
+      } else if (typeof data === 'string') {
+        message = data
+      }
+    }
     ElNotification({
       title: '请求异常',
       message,

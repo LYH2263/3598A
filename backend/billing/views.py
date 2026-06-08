@@ -60,7 +60,14 @@ from billing.serializers import (
 )
 from billing.services.bi_analytics_service import BIAnalyticsService
 from billing.services.ledger_service import LedgerService
-from billing.services.monthly_closing_service import MonthlyClosingService
+from billing.services.monthly_closing_service import (
+    MonthlyClosingService,
+    _period_start_end as _mcs_period_start_end,
+)
+
+
+def _period_start_end(period):
+    return _mcs_period_start_end(period)
 from billing.services.pricing_service import PricingService
 from billing.services.recharge_plan_service import RechargePlanService
 
@@ -509,17 +516,151 @@ class StudentStatementDownloadCSVAPIView(APIView):
         return response
 
 
-def _period_start_end(period: str):
-    from django.utils import timezone as tz
-    year, month = map(int, period.split('-'))
-    start = datetime(year, month, 1, 0, 0, 0)
-    if month == 12:
-        ny, nm = year + 1, 1
-    else:
-        ny, nm = year, month + 1
-    end = datetime(ny, nm, 1, 0, 0, 0)
-    current_tz = tz.get_current_timezone()
-    return current_tz.localize(start), current_tz.localize(end)
+class StudentStatementDownloadPDFAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request, period: str):
+        stmt = MonthlyStatement.objects.filter(
+            user=request.user, period=period
+        ).first()
+        if not stmt:
+            return Response({'detail': '该月度账单不存在。'}, status=status.HTTP_404_NOT_FOUND)
+
+        start, end = _period_start_end(period)
+        logs = BalanceChangeLog.objects.filter(
+            user=request.user,
+            created_at__gte=start,
+            created_at__lt=end,
+        ).order_by('created_at')
+
+        try:
+            from reportlab.lib import colors
+            from reportlab.lib.pagesizes import A4
+            from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+            from reportlab.lib.units import mm
+            from reportlab.pdfbase import pdfmetrics
+            from reportlab.pdfbase.cidfonts import UnicodeCIDFont
+            from reportlab.platypus import (
+                Paragraph,
+                SimpleDocTemplate,
+                Spacer,
+                Table,
+                TableStyle,
+            )
+        except ImportError:
+            return Response(
+                {'detail': '服务器未安装 reportlab，无法生成 PDF，请使用 CSV 下载。'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+
+        try:
+            pdfmetrics.registerFont(UnicodeCIDFont('STSong-Light'))
+        except Exception:
+            pass
+
+        import io as _io
+        buf = _io.BytesIO()
+        doc = SimpleDocTemplate(
+            buf,
+            pagesize=A4,
+            leftMargin=20 * mm,
+            rightMargin=20 * mm,
+            topMargin=15 * mm,
+            bottomMargin=15 * mm,
+            title=f'月结单_{request.user.username}_{period}',
+        )
+
+        font_name = 'STSong-Light'
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            'zh_title', parent=styles['Title'], fontName=font_name, fontSize=20, leading=28
+        )
+        normal_style = ParagraphStyle(
+            'zh_normal', parent=styles['Normal'], fontName=font_name, fontSize=11, leading=18
+        )
+        small_style = ParagraphStyle(
+            'zh_small', parent=styles['Normal'], fontName=font_name, fontSize=9, leading=13
+        )
+
+        story = []
+        story.append(Paragraph('学生水电充值月结单', title_style))
+        story.append(Spacer(1, 8))
+        story.append(Paragraph(f'用户：{request.user.username} &nbsp;&nbsp; 账期：{period}', normal_style))
+        story.append(Paragraph(f'生成时间：{timezone.now().strftime("%Y-%m-%d %H:%M:%S")}', normal_style))
+        story.append(Spacer(1, 14))
+
+        summary_data = [
+            ['项目', '金额（元）', '笔数'],
+            ['期初余额', f'{stmt.opening_balance}', ''],
+            ['本月充值', f'{stmt.recharge_total}', str(stmt.recharge_count)],
+            ['本月水费', f'{stmt.water_total}', str(stmt.water_count)],
+            ['本月电费', f'{stmt.electricity_total}', str(stmt.electricity_count)],
+            ['本月退款', f'{stmt.refund_total}', str(stmt.refund_count)],
+            ['本月调整', f'{stmt.adjust_total}', str(stmt.adjust_count)],
+            ['跨月调整', f'{stmt.cross_month_adjust_total}', ''],
+            ['期末余额', f'{stmt.closing_balance}', ''],
+        ]
+        summary_table = Table(summary_data, colWidths=[55 * mm, 40 * mm, 30 * mm])
+        summary_table.setStyle(TableStyle([
+            ('FONTNAME', (0, 0), (-1, -1), font_name),
+            ('FONTSIZE', (0, 0), (-1, -1), 11),
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#eef4ff')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#1f4ed3')),
+            ('ALIGN', (1, 0), (-1, -1), 'RIGHT'),
+            ('ALIGN', (0, 0), (0, -1), 'LEFT'),
+            ('GRID', (0, 0), (-1, -1), 0.4, colors.grey),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('TOPPADDING', (0, 0), (-1, -1), 6),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#fafbff')]),
+        ]))
+        story.append(summary_table)
+        story.append(Spacer(1, 18))
+
+        story.append(Paragraph('流水明细', normal_style))
+        story.append(Spacer(1, 8))
+
+        type_label = dict(BalanceChangeLog.CHANGE_TYPE_CHOICES)
+        log_header = ['时间', '类型', '变动金额', '变动前', '变动后', '操作人', '备注', '已结账']
+        log_data = [log_header]
+        for log in logs:
+            log_data.append([
+                log.created_at.strftime('%Y-%m-%d %H:%M'),
+                type_label.get(log.change_type, log.change_type),
+                f'{log.amount_delta}',
+                f'{log.balance_before}',
+                f'{log.balance_after}',
+                log.operator or '',
+                (log.remark or '')[:30],
+                '是' if log.is_settled else '否',
+            ])
+        if len(log_data) == 1:
+            log_data.append(['(无流水记录)', '', '', '', '', '', '', ''])
+
+        log_table = Table(log_data, colWidths=[28 * mm, 22 * mm, 22 * mm, 22 * mm, 22 * mm, 16 * mm, 30 * mm, 16 * mm])
+        log_table.setStyle(TableStyle([
+            ('FONTNAME', (0, 0), (-1, -1), font_name),
+            ('FONTSIZE', (0, 0), (-1, -1), 8),
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#eef4ff')),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.HexColor('#1f4ed3')),
+            ('GRID', (0, 0), (-1, -1), 0.3, colors.grey),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#fafbff')]),
+        ]))
+        story.append(log_table)
+        story.append(Spacer(1, 10))
+        story.append(Paragraph(
+            '本账单由系统自动生成，如有疑问请联系管理员。',
+            small_style,
+        ))
+
+        doc.build(story)
+        pdf_bytes = buf.getvalue()
+        buf.close()
+
+        response = HttpResponse(pdf_bytes, content_type='application/pdf')
+        response['Content-Disposition'] = f'attachment; filename="statement_{request.user.username}_{period}.pdf"'
+        return response
 
 
 def _parse_filters_from_request(request, serializer_class=BIFilterSerializer):

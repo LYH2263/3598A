@@ -36,6 +36,7 @@ from billing.views import (
     StudentRechargePlanListAPIView,
     StudentStatementDetailAPIView,
     StudentStatementDownloadCSVAPIView,
+    StudentStatementDownloadPDFAPIView,
     StudentStatementListAPIView,
     WalletActionAPIView,
     WalletLogListAPIView,
@@ -55,6 +56,7 @@ urlpatterns = [
     path('statements/', StudentStatementListAPIView.as_view(), name='student-statements'),
     path('statements/<str:period>/', StudentStatementDetailAPIView.as_view(), name='student-statement-detail'),
     path('statements/<str:period>/csv/', StudentStatementDownloadCSVAPIView.as_view(), name='student-statement-csv'),
+    path('statements/<str:period>/pdf/', StudentStatementDownloadPDFAPIView.as_view(), name='student-statement-pdf'),
 
     path('admin/statements/', MonthlyStatementAdminListAPIView.as_view(), name='admin-statements'),
     path('admin/statements/<int:statement_id>/', MonthlyStatementAdminDetailAPIView.as_view(), name='admin-statement-detail'),
