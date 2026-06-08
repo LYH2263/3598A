@@ -13,23 +13,46 @@ from notices.models import (
 
 class AnnouncementSerializer(serializers.ModelSerializer):
     publisher_name = serializers.CharField(source='publisher.username', read_only=True)
+    status = serializers.CharField(read_only=True)
+    status_display = serializers.CharField(read_only=True)
 
     class Meta:
         model = Announcement
-        fields = ('id', 'title', 'content', 'is_active', 'publisher_name', 'published_at')
+        fields = (
+            'id', 'title', 'content', 'is_active', 'publisher_name',
+            'published_at', 'scheduled_at', 'expires_at', 'published',
+            'status', 'status_display',
+        )
 
 
 class AnnouncementCreateSerializer(serializers.Serializer):
     title = serializers.CharField(max_length=200)
     content = serializers.CharField(max_length=4000)
     is_active = serializers.BooleanField(default=True)
+    scheduled_at = serializers.DateTimeField(required=False, allow_null=True)
+    expires_at = serializers.DateTimeField(required=False, allow_null=True)
+
+    def validate(self, data):
+        scheduled_at = data.get('scheduled_at')
+        expires_at = data.get('expires_at')
+        if scheduled_at and expires_at and expires_at <= scheduled_at:
+            raise serializers.ValidationError('失效时间必须晚于定时发布时间。')
+        return data
 
     def create(self, validated_data):
         request = self.context['request']
+        now = timezone.now()
+        scheduled_at = validated_data.get('scheduled_at')
+        should_publish_now = validated_data.get('is_active', True) and (
+            scheduled_at is None or scheduled_at <= now
+        )
         return Announcement.objects.create(
             title=validated_data['title'].strip(),
             content=validated_data['content'].strip(),
             is_active=validated_data.get('is_active', True),
+            scheduled_at=scheduled_at,
+            expires_at=validated_data.get('expires_at'),
+            published=should_publish_now,
             publisher=request.user,
         )
 

@@ -225,7 +225,16 @@ const announcementForm = reactive({
   title: '',
   content: '',
   is_active: true,
+  scheduled_at: '',
+  expires_at: '',
 })
+
+const announcementStatusMap = {
+  draft: { label: '草稿', type: 'info' },
+  scheduled: { label: '待发布', type: 'warning' },
+  published: { label: '已发布', type: 'success' },
+  expired: { label: '已失效', type: 'danger' },
+}
 
 const isAdmin = computed(() => authStore.user?.profile?.role === 'admin')
 
@@ -577,11 +586,24 @@ async function publishAnnouncement() {
 
   actionLoading.value = true
   try {
-    const { data } = await http.post('/notices/announcements/', announcementForm)
-    ElNotification({ title: '公告已发布', message: `已推送 ${data.push_count} 位用户。`, type: 'success' })
+    const payload = {
+      title: announcementForm.title,
+      content: announcementForm.content,
+      is_active: announcementForm.is_active,
+      scheduled_at: announcementForm.scheduled_at || null,
+      expires_at: announcementForm.expires_at || null,
+    }
+    const { data } = await http.post('/notices/announcements/', payload)
+    if (data.announcement.published) {
+      ElNotification({ title: '公告已发布', message: `已推送 ${data.push_count} 位用户。`, type: 'success' })
+    } else {
+      ElNotification({ title: '公告已保存', message: '已按设置的时间定时发布。', type: 'info' })
+    }
     announcementForm.title = ''
     announcementForm.content = ''
     announcementForm.is_active = true
+    announcementForm.scheduled_at = ''
+    announcementForm.expires_at = ''
     await loadAnnouncements()
   } finally {
     actionLoading.value = false
@@ -1173,28 +1195,93 @@ onMounted(async () => {
               <el-tab-pane :label="isAdmin ? '公告发布' : '公告通知'" name="announcements">
                 <template v-if="isAdmin">
                   <el-form label-position="top" class="section-card" shadow="never" @submit.prevent>
-                    <el-form-item label="公告标题">
-                      <el-input v-model="announcementForm.title" placeholder="请输入公告标题" clearable />
-                    </el-form-item>
+                    <el-row :gutter="12">
+                      <el-col :span="24">
+                        <el-form-item label="公告标题">
+                          <el-input v-model="announcementForm.title" placeholder="请输入公告标题" clearable />
+                        </el-form-item>
+                      </el-col>
+                    </el-row>
                     <el-form-item label="公告内容">
                       <el-input v-model="announcementForm.content" type="textarea" :rows="4" placeholder="请输入公告内容" />
                     </el-form-item>
-                    <el-form-item>
-                      <el-switch v-model="announcementForm.is_active" active-text="立即生效" inactive-text="仅保存" />
-                    </el-form-item>
-                    <el-button type="primary" :loading="actionLoading" @click="publishAnnouncement">发布公告并推送通知</el-button>
+                    <el-row :gutter="12">
+                      <el-col :span="8">
+                        <el-form-item label="定时发布时间（可选）">
+                          <el-date-picker
+                            v-model="announcementForm.scheduled_at"
+                            type="datetime"
+                            value-format="YYYY-MM-DDTHH:mm:ss"
+                            placeholder="留空表示立即发布"
+                            style="width: 100%"
+                            clearable
+                          />
+                        </el-form-item>
+                      </el-col>
+                      <el-col :span="8">
+                        <el-form-item label="失效时间（可选）">
+                          <el-date-picker
+                            v-model="announcementForm.expires_at"
+                            type="datetime"
+                            value-format="YYYY-MM-DDTHH:mm:ss"
+                            placeholder="留空表示永不失效"
+                            style="width: 100%"
+                            clearable
+                          />
+                        </el-form-item>
+                      </el-col>
+                      <el-col :span="8" style="display: flex; align-items: flex-end; padding-bottom: 18px">
+                        <el-switch v-model="announcementForm.is_active" active-text="立即生效" inactive-text="仅保存" />
+                      </el-col>
+                    </el-row>
+                    <el-button type="primary" :loading="actionLoading" @click="publishAnnouncement">
+                      {{ announcementForm.scheduled_at ? '保存并定时发布' : '发布公告并推送通知' }}
+                    </el-button>
                   </el-form>
                 </template>
 
                 <div class="table-grid" style="margin-top: 14px">
                   <el-card class="section-card" shadow="never">
                     <h3 class="section-title">公告历史</h3>
-                    <el-timeline>
-                      <el-timeline-item v-for="item in announcements" :key="item.id" :timestamp="formatDateTime(item.published_at)">
-                        <h4 style="margin: 0 0 6px">{{ item.title }}</h4>
-                        <p style="margin: 0; color: var(--text-sub)">{{ item.content }}</p>
-                      </el-timeline-item>
-                    </el-timeline>
+                    <template v-if="isAdmin">
+                      <el-table :data="announcements" stripe border empty-text="暂无公告">
+                        <el-table-column prop="id" label="ID" width="70" />
+                        <el-table-column label="状态" width="100">
+                          <template #default="{ row }">
+                            <el-tag
+                              :type="announcementStatusMap[row.status]?.type || 'info'"
+                              effect="plain"
+                              size="small"
+                            >
+                              {{ announcementStatusMap[row.status]?.label || row.status_display }}
+                            </el-tag>
+                          </template>
+                        </el-table-column>
+                        <el-table-column prop="title" label="标题" min-width="180" show-overflow-tooltip />
+                        <el-table-column prop="content" label="内容" min-width="260" show-overflow-tooltip />
+                        <el-table-column label="定时发布" width="170">
+                          <template #default="{ row }">
+                            {{ row.scheduled_at ? formatDateTime(row.scheduled_at) : '--' }}
+                          </template>
+                        </el-table-column>
+                        <el-table-column label="失效时间" width="170">
+                          <template #default="{ row }">
+                            {{ row.expires_at ? formatDateTime(row.expires_at) : '--' }}
+                          </template>
+                        </el-table-column>
+                        <el-table-column label="发布时间" width="170">
+                          <template #default="{ row }">{{ formatDateTime(row.published_at) }}</template>
+                        </el-table-column>
+                      </el-table>
+                    </template>
+                    <template v-else>
+                      <el-timeline>
+                        <el-timeline-item v-for="item in announcements" :key="item.id" :timestamp="formatDateTime(item.published_at)">
+                          <h4 style="margin: 0 0 6px">{{ item.title }}</h4>
+                          <p style="margin: 0; color: var(--text-sub)">{{ item.content }}</p>
+                        </el-timeline-item>
+                      </el-timeline>
+                    </template>
                   </el-card>
 
                   <el-card class="section-card" shadow="never">

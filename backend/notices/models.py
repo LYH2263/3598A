@@ -7,16 +7,59 @@ from django.utils import timezone
 
 
 class Announcement(models.Model):
+    STATUS_DRAFT = 'draft'
+    STATUS_SCHEDULED = 'scheduled'
+    STATUS_PUBLISHED = 'published'
+    STATUS_EXPIRED = 'expired'
+
+    STATUS_CHOICES = [
+        (STATUS_DRAFT, '草稿'),
+        (STATUS_SCHEDULED, '待发布'),
+        (STATUS_PUBLISHED, '已发布'),
+        (STATUS_EXPIRED, '已失效'),
+    ]
+
     title = models.CharField(max_length=200)
     content = models.TextField()
     is_active = models.BooleanField(default=True)
     publisher = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, related_name='published_announcements')
     published_at = models.DateTimeField(auto_now_add=True)
     created_at = models.DateTimeField(auto_now_add=True)
+    scheduled_at = models.DateTimeField(null=True, blank=True, help_text='定时发布时间，为空表示立即发布')
+    expires_at = models.DateTimeField(null=True, blank=True, help_text='失效时间，为空表示永不失效')
+    published = models.BooleanField(default=False, help_text='是否已实际推送过')
 
     class Meta:
         db_table = 'announcements'
         ordering = ['-published_at']
+        indexes = [
+            models.Index(fields=['published', 'scheduled_at'], name='ann_pub_scheduled_idx'),
+        ]
+
+    @property
+    def status(self):
+        now = timezone.now()
+        if self.expires_at and self.expires_at <= now:
+            return self.STATUS_EXPIRED
+        if not self.is_active:
+            return self.STATUS_DRAFT
+        if self.published:
+            return self.STATUS_PUBLISHED
+        return self.STATUS_SCHEDULED
+
+    @property
+    def status_display(self):
+        return dict(self.STATUS_CHOICES).get(self.status, self.status)
+
+    def is_visible_to_student(self):
+        now = timezone.now()
+        if not self.is_active:
+            return False
+        if not self.published:
+            return False
+        if self.expires_at and self.expires_at <= now:
+            return False
+        return True
 
 
 class UserNotification(models.Model):

@@ -12,9 +12,14 @@ from notices.models import (
 
 @admin.register(Announcement)
 class AnnouncementAdmin(admin.ModelAdmin):
-    list_display = ('id', 'title', 'is_active', 'publisher', 'published_at')
+    list_display = ('id', 'title', 'status_display', 'is_active', 'published', 'publisher', 'published_at', 'scheduled_at', 'expires_at')
     search_fields = ('title', 'content')
-    list_filter = ('is_active',)
+    list_filter = ('is_active', 'published', 'scheduled_at', 'expires_at')
+    readonly_fields = ('status_display',)
+
+    def status_display(self, obj):
+        return obj.status_display
+    status_display.short_description = '状态'
 
 
 @admin.register(UserNotification)

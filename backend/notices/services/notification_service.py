@@ -36,8 +36,13 @@ class NotificationService:
 
     @staticmethod
     def push_announcement(announcement):
+        if announcement.published:
+            return 0
+
         users = list(User.objects.filter(is_active=True).only('id'))
         if not users:
+            announcement.published = True
+            announcement.save(update_fields=['published'])
             return 0
 
         result = NotificationService.dispatch(
@@ -48,6 +53,8 @@ class NotificationService:
                 'content': announcement.content,
             },
         )
+        announcement.published = True
+        announcement.save(update_fields=['published'])
         if result.get('success'):
             return result.get('users', 0)
 

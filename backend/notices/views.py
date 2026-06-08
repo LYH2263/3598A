@@ -5,6 +5,7 @@ from datetime import datetime
 
 from django.db.models import Q
 from django.http import HttpResponse
+from django.utils import timezone
 from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -41,9 +42,20 @@ class AnnouncementListCreateAPIView(APIView):
 
     def get(self, request):
         include_inactive = request.query_params.get('include_inactive', 'false') == 'true'
+        is_admin = getattr(request.user.profile, 'role', 'student') == 'admin'
         queryset = Announcement.objects.all()
-        if not include_inactive or getattr(request.user.profile, 'role', 'student') != 'admin':
-            queryset = queryset.filter(is_active=True)
+
+        if is_admin:
+            if not include_inactive:
+                queryset = queryset.filter(is_active=True)
+        else:
+            now = timezone.now()
+            queryset = queryset.filter(
+                is_active=True,
+                published=True,
+            ).filter(
+                Q(expires_at__isnull=True) | Q(expires_at__gt=now)
+            )
 
         return Response(AnnouncementSerializer(queryset[:100], many=True).data)
 
@@ -55,8 +67,16 @@ class AnnouncementListCreateAPIView(APIView):
         serializer.is_valid(raise_exception=True)
         announcement = serializer.save()
 
-        push_count = NotificationService.push_announcement(announcement)
-        logger.info('Announcement published by %s, pushed to %s users', request.user.username, push_count)
+        push_count = 0
+        if announcement.published:
+            push_count = NotificationService.push_announcement(announcement)
+            logger.info('Announcement published by %s, pushed to %s users', request.user.username, push_count)
+        else:
+            logger.info(
+                'Announcement scheduled by %s, scheduled_at=%s',
+                request.user.username,
+                announcement.scheduled_at,
+            )
 
         return Response(
             {
