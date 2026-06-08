@@ -11,17 +11,6 @@ class Migration(migrations.Migration):
     ]
 
     operations = [
-        migrations.AddField(
-            model_name='usernotification',
-            name='related_delivery_log',
-            field=models.ForeignKey(
-                blank=True,
-                null=True,
-                on_delete=django.db.models.deletion.SET_NULL,
-                related_name='site_notifications',
-                to='notices.messagedeliverylog',
-            ),
-        ),
         migrations.CreateModel(
             name='MessageType',
             fields=[
@@ -120,7 +109,7 @@ class Migration(migrations.Migration):
                 'unique_together': {('user', 'message_type')},
             },
         ),
-        migrations.AlterField(
+        migrations.AddField(
             model_name='usernotification',
             name='related_delivery_log',
             field=models.ForeignKey(

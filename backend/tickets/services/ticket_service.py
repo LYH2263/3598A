@@ -1,5 +1,5 @@
 import logging
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from django.contrib.auth.models import User
 from django.db import transaction
@@ -31,7 +31,7 @@ class TicketService:
         return TicketSLAConfig.objects.filter(priority=priority, is_active=True).first()
 
     @classmethod
-    def _calculate_sla_deadline(cls, ticket: Ticket) -> timezone.datetime | None:
+    def _calculate_sla_deadline(cls, ticket: Ticket) -> datetime | None:
         cfg = cls._get_sla_config(ticket.priority)
         hours = cfg.resolve_hours if cfg else cls.DEFAULT_SLA[ticket.priority]['resolve_hours']
         return ticket.created_at + timedelta(hours=hours)

@@ -545,7 +545,7 @@ async function loadMyStatements() {
   myStatements.value = data
 }
 
-async function viewStatementDetail(period: string) {
+async function viewStatementDetail(period) {
   selectedStatementPeriod.value = period
   statementDetailLoading.value = true
   try {
@@ -758,11 +758,11 @@ onMounted(async () => {
             <el-button v-if="isAdmin" style="margin-right: 8px" type="primary" @click="$router.push('/consumption-analytics')">消费分析</el-button>
             <el-button v-if="isAdmin" style="margin-right: 8px" type="primary" plain @click="$router.push('/plan-management')">计划管理</el-button>
             <el-button v-if="isAdmin" style="margin-right: 8px" type="primary" plain @click="$router.push('/price-management')">价格管理</el-button>
-            <el-button v-else style="margin-right: 8px" type="primary" plain @click="$router.push('/my-stay')">我的入住</el-button>
-            <el-button v-else style="margin-right: 8px" type="primary" plain @click="$router.push('/my-coupons')">我的优惠券</el-button>
-            <el-button v-else style="margin-right: 8px" type="primary" plain @click="$router.push('/my-plans')">我的计划</el-button>
-            <el-button v-else style="margin-right: 8px" type="primary" @click="$router.push('/my-tickets')">报修/工单</el-button>
-            <el-button v-else style="margin-right: 8px" type="primary" @click="$router.push('/my-analytics')">我的分析</el-button>
+            <el-button v-if="!isAdmin" style="margin-right: 8px" type="primary" plain @click="$router.push('/my-stay')">我的入住</el-button>
+            <el-button v-if="!isAdmin" style="margin-right: 8px" type="primary" plain @click="$router.push('/my-coupons')">我的优惠券</el-button>
+            <el-button v-if="!isAdmin" style="margin-right: 8px" type="primary" plain @click="$router.push('/my-plans')">我的计划</el-button>
+            <el-button v-if="!isAdmin" style="margin-right: 8px" type="primary" @click="$router.push('/my-tickets')">报修/工单</el-button>
+            <el-button v-if="!isAdmin" style="margin-right: 8px" type="primary" @click="$router.push('/my-analytics')">我的分析</el-button>
             <el-button style="margin-right: 8px" @click="refreshAll">刷新数据</el-button>
             <el-button type="danger" plain @click="logout">退出登录</el-button>
           </el-col>

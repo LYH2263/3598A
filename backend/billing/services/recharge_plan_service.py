@@ -1,4 +1,5 @@
 from decimal import Decimal
+from datetime import timedelta
 
 from django.db import transaction
 from django.utils import timezone
@@ -120,7 +121,7 @@ class RechargePlanService:
     @staticmethod
     def get_upcoming_executions(user, days: int = 7) -> list:
         today = timezone.now().date()
-        end_day = today + timezone.timedelta(days=days)
+        end_day = today + timedelta(days=days)
         plans = RechargePlan.objects.filter(
             user=user,
             status=RechargePlan.STATUS_ACTIVE,
