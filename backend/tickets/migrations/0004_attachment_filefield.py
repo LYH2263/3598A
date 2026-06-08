@@ -11,7 +11,7 @@ class Migration(migrations.Migration):
         migrations.AddField(
             model_name='ticketattachment',
             name='file',
-            field=models.FileField(upload_to='tickets/ticket_%7Bticket_id%7D/', verbose_name='附件文件'),
+            field=models.FileField(default='', upload_to='tickets/ticket_%7Bticket_id%7D/', verbose_name='附件文件'),
             preserve_default=False,
         ),
         migrations.RemoveField(
