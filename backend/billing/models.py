@@ -398,7 +398,7 @@ class RechargePlan(models.Model):
     def __str__(self) -> str:
         return f'{self.user.username} - {self.name} ({self.get_period_display()})'
 
-    def compute_next_execution_date(self, from_date=None) -> date:
+    def compute_next_execution_date(self, from_date=None):
         from_date = from_date or (self.last_execution_date or self.start_date)
         if self.period == self.PERIOD_DAILY:
             return from_date + timedelta(days=1)
@@ -411,7 +411,7 @@ class RechargePlan(models.Model):
                 month = 1
                 year += 1
             day = min(from_date.day, 28)
-            return datetime(year, month, day).date()
+            return date(year, month, day)
         return from_date
 
 

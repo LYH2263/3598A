@@ -155,10 +155,11 @@ class RechargePlanService:
     @transaction.atomic
     def execute_due_plans(operator: str = 'system') -> dict:
         today = timezone.now().date()
-        due_plans = RechargePlan.objects.select_for_update().select_related('user', 'user__wallet').filter(
+        due_plans_qs = RechargePlan.objects.select_for_update().select_related('user').filter(
             status=RechargePlan.STATUS_ACTIVE,
             next_execution_date__lte=today,
         )
+        due_plans = list(due_plans_qs)
 
         total = 0
         success = 0
@@ -177,10 +178,10 @@ class RechargePlanService:
             elif result['status'] == 'skipped':
                 skipped += 1
 
-        expired_plans = RechargePlan.objects.filter(
+        expired_plans = list(RechargePlan.objects.filter(
             status=RechargePlan.STATUS_ACTIVE,
             end_date__lt=today,
-        )
+        ))
         for p in expired_plans:
             p.status = RechargePlan.STATUS_EXPIRED
             p.ended_at = timezone.now()
@@ -192,16 +193,17 @@ class RechargePlanService:
             'success': success,
             'failed': failed,
             'skipped': skipped,
-            'expired_count': expired_plans.count(),
+            'expired_count': len(expired_plans),
             'errors': errors,
         }
 
     @staticmethod
     def _execute_single_plan(plan: RechargePlan, today, operator: str) -> dict:
+        scheduled_date = plan.next_execution_date
         execution = PlanExecution.objects.create(
             plan=plan,
             user=plan.user,
-            scheduled_date=plan.next_execution_date,
+            scheduled_date=scheduled_date,
             amount=plan.amount,
             channel=plan.channel,
             status=PlanExecution.STATUS_PENDING,
@@ -232,7 +234,7 @@ class RechargePlanService:
             plan.last_execution_date = today
             plan.total_executions += 1
             plan.success_count += 1
-            next_date = plan.compute_next_execution_date(today)
+            next_date = plan.compute_next_execution_date(scheduled_date)
             if next_date > plan.end_date:
                 plan.status = RechargePlan.STATUS_EXPIRED
                 plan.ended_at = timezone.now()
@@ -258,7 +260,13 @@ class RechargePlanService:
             return {'status': 'success'}
 
         except ValidationError as e:
-            msg = e.detail[0] if isinstance(e.detail, list) else str(e.detail)
+            detail = getattr(e, 'detail', str(e))
+            if isinstance(detail, list):
+                msg = '; '.join(str(x) for x in detail)
+            elif isinstance(detail, dict):
+                msg = '; '.join(f'{k}: {v}' for k, v in detail.items())
+            else:
+                msg = str(detail)
             execution.status = PlanExecution.STATUS_FAILED
             execution.failure_reason = msg
             execution.executed_at = timezone.now()
@@ -278,13 +286,13 @@ class RechargePlanService:
     def _handle_execution_failure(plan: RechargePlan, execution: PlanExecution, reason: str):
         plan.total_executions += 1
         plan.failure_count += 1
+        scheduled_date = execution.scheduled_date
 
         if plan.failure_action == RechargePlan.FAILURE_ACTION_PAUSE:
             plan.status = RechargePlan.STATUS_PAUSED
             plan.paused_at = timezone.now()
         else:
-            today = timezone.now().date()
-            next_date = plan.compute_next_execution_date(today)
+            next_date = plan.compute_next_execution_date(scheduled_date)
             if next_date > plan.end_date:
                 plan.status = RechargePlan.STATUS_EXPIRED
                 plan.ended_at = timezone.now()

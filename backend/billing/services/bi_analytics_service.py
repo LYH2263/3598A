@@ -22,10 +22,10 @@ from django.db.models import (
 from django.db.models.functions import (
     Cast,
     Coalesce,
-    ExtractDayOfWeek,
     ExtractHour,
     ExtractMonth,
     ExtractWeek,
+    ExtractWeekDay,
     ExtractYear,
     TruncDate,
     TruncMonth,
@@ -469,7 +469,7 @@ class BIAnalyticsService:
     def by_weekday(filters: dict, user: Optional[User] = None) -> dict:
         qs = BIAnalyticsService._build_base_queryset(filters, user)
 
-        weekday_expr = ExtractDayOfWeek('created_at')
+        weekday_expr = ExtractWeekDay('created_at')
 
         stats = list(
             qs.annotate(weekday=weekday_expr)
