@@ -1,13 +1,19 @@
 from django.contrib.auth.models import User
 from rest_framework import serializers
 
+from accounts.permissions import IsAdminRole
 from housing.models import Room
 from tickets.models import Ticket, TicketAttachment, TicketEscalationLog, TicketReply, TicketSLAConfig
 from tickets.services.ticket_service import TicketService
 
 
+def _is_admin(request):
+    return IsAdminRole().has_permission(request, None)
+
+
 class TicketAttachmentSerializer(serializers.ModelSerializer):
     uploaded_by_name = serializers.CharField(source='uploaded_by.username', read_only=True)
+    file_url = serializers.SerializerMethodField()
 
     class Meta:
         model = TicketAttachment
@@ -23,14 +29,28 @@ class TicketAttachmentSerializer(serializers.ModelSerializer):
             'mime_type',
             'created_at',
         )
-        read_only_fields = ('id', 'uploaded_by', 'uploaded_by_name', 'created_at')
+        read_only_fields = ('id', 'ticket', 'reply', 'uploaded_by', 'uploaded_by_name', 'file_name', 'file_url', 'file_size', 'mime_type', 'created_at')
+
+    def get_file_url(self, obj):
+        return obj.file_url
 
 
-class TicketAttachmentWriteSerializer(serializers.Serializer):
-    file_name = serializers.CharField(max_length=255)
-    file_url = serializers.URLField(max_length=512)
-    file_size = serializers.IntegerField(default=0, min_value=0)
-    mime_type = serializers.CharField(max_length=128, required=False, default='')
+class TicketAttachmentUploadSerializer(serializers.Serializer):
+    file = serializers.FileField(required=True)
+    ticket_id = serializers.IntegerField(required=False, allow_null=True, default=None)
+
+    def validate_file(self, value):
+        allowed_mime = ['image/jpeg', 'image/png', 'image/jpg']
+        allowed_ext = ['.jpg', '.jpeg', '.png']
+        import os
+        ext = os.path.splitext(value.name)[1].lower()
+        if value.content_type and value.content_type not in allowed_mime:
+            raise serializers.ValidationError('仅支持 JPG 和 PNG 格式图片。')
+        if ext not in allowed_ext:
+            raise serializers.ValidationError('仅支持 JPG 和 PNG 格式图片。')
+        if value.size > 10 * 1024 * 1024:
+            raise serializers.ValidationError('图片大小不能超过 10MB。')
+        return value
 
 
 class TicketReplySerializer(serializers.ModelSerializer):
@@ -233,8 +253,8 @@ class TicketCreateSerializer(serializers.Serializer):
     room_id = serializers.IntegerField(required=False, allow_null=True, default=None)
     room_text = serializers.CharField(max_length=128, required=False, default='', allow_blank=True)
     contact_phone = serializers.CharField(max_length=20, required=False, default='', allow_blank=True)
-    attachments = serializers.ListField(
-        child=TicketAttachmentWriteSerializer(),
+    attachment_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
         required=False,
         default=list,
     )
@@ -247,10 +267,27 @@ class TicketCreateSerializer(serializers.Serializer):
             raise serializers.ValidationError('房间不存在或已停用。')
         return value
 
+    def validate_attachment_ids(self, value):
+        if not value:
+            return value
+        user = self.context['request'].user
+        valid_ids = list(
+            TicketAttachment.objects.filter(
+                id__in=value,
+                uploaded_by=user,
+                ticket__isnull=True,
+            ).values_list('id', flat=True)
+        )
+        invalid = set(value) - set(valid_ids)
+        if invalid:
+            raise serializers.ValidationError(f'附件 {sorted(invalid)} 不存在、不属于您或已被使用。')
+        return value
+
     def create(self, validated_data):
         request = self.context['request']
         room_id = validated_data.pop('room_id', None)
         room = Room.objects.filter(id=room_id).first() if room_id else None
+        attachment_ids = validated_data.pop('attachment_ids', [])
         return TicketService.create_ticket(
             student=request.user,
             title=validated_data['title'],
@@ -260,7 +297,7 @@ class TicketCreateSerializer(serializers.Serializer):
             room=room,
             room_text=validated_data.get('room_text', ''),
             contact_phone=validated_data.get('contact_phone', ''),
-            attachments=validated_data.get('attachments', []),
+            attachment_ids=attachment_ids,
         )
 
 
@@ -314,21 +351,36 @@ class TicketStatusActionSerializer(serializers.Serializer):
 class TicketReplyCreateSerializer(serializers.Serializer):
     content = serializers.CharField(max_length=4000)
     is_internal = serializers.BooleanField(default=False)
-    attachments = serializers.ListField(
-        child=TicketAttachmentWriteSerializer(),
+    attachment_ids = serializers.ListField(
+        child=serializers.IntegerField(min_value=1),
         required=False,
         default=list,
     )
 
+    def validate_attachment_ids(self, value):
+        if not value:
+            return value
+        user = self.context['request'].user
+        is_admin = _is_admin(self.context['request'])
+        qs = TicketAttachment.objects.filter(id__in=value, uploaded_by=user, reply__isnull=True)
+        if not is_admin:
+            qs = qs.filter(is_internal=False) if hasattr(TicketAttachment, 'is_internal') else qs
+        valid_ids = list(qs.values_list('id', flat=True))
+        invalid = set(value) - set(valid_ids)
+        if invalid:
+            raise serializers.ValidationError(f'附件 {sorted(invalid)} 不存在、不属于您或已被使用。')
+        return value
+
     def save(self, **kwargs):
         ticket = kwargs['ticket']
         author = kwargs['author']
+        attachment_ids = self.validated_data.get('attachment_ids', [])
         return TicketService.add_reply(
             ticket=ticket,
             author=author,
             content=self.validated_data['content'],
             is_internal=self.validated_data.get('is_internal', False),
-            attachments=self.validated_data.get('attachments', []),
+            attachment_ids=attachment_ids,
         )
 
 

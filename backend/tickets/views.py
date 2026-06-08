@@ -6,10 +6,12 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.permissions import IsAdminRole
-from tickets.models import Ticket, TicketSLAConfig
+from tickets.models import Ticket, TicketAttachment, TicketSLAConfig
 from tickets.serializers import (
     AdminUserSerializer,
     TicketAssignSerializer,
+    TicketAttachmentSerializer,
+    TicketAttachmentUploadSerializer,
     TicketCreateSerializer,
     TicketDetailSerializer,
     TicketRateSerializer,
@@ -340,3 +342,44 @@ class TicketConstantsAPIView(APIView):
             'statuses': [{'value': v, 'label': l} for v, l in Ticket.STATUS_CHOICES],
             'status_transitions': dict(Ticket.STATUS_TRANSITIONS),
         })
+
+
+class TicketAttachmentUploadAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    parser_classes = []
+
+    def post(self, request):
+        from rest_framework.parsers import MultiPartParser, FormParser
+        self.parser_classes = [MultiPartParser, FormParser]
+        serializer = TicketAttachmentUploadSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        ticket_id = serializer.validated_data.get('ticket_id')
+        if ticket_id:
+            ticket = Ticket.objects.filter(id=ticket_id).first()
+            if not ticket:
+                return Response({'detail': '工单不存在。'}, status=status.HTTP_404_NOT_FOUND)
+            if ticket.student_id != request.user.id and not _is_admin(request) and ticket.assignee_id != request.user.id:
+                return Response({'detail': '您无权上传该工单的附件。'}, status=status.HTTP_403_FORBIDDEN)
+        att = TicketService.upload_attachment(
+            uploaded_by=request.user,
+            file=serializer.validated_data['file'],
+            ticket_id=ticket_id,
+        )
+        return Response(TicketAttachmentSerializer(att).data, status=status.HTTP_201_CREATED)
+
+
+class TicketAttachmentDeleteAPIView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def delete(self, request, pk):
+        att = TicketAttachment.objects.filter(id=pk).first()
+        if not att:
+            return Response({'detail': '附件不存在。'}, status=status.HTTP_404_NOT_FOUND)
+        is_admin = _is_admin(request)
+        if att.uploaded_by_id != request.user.id and not is_admin:
+            return Response({'detail': '您无权删除该附件。'}, status=status.HTTP_403_FORBIDDEN)
+        if att.reply_id or (att.ticket_id and not is_admin):
+            if att.reply_id:
+                return Response({'detail': '已关联回复的附件不可删除。'}, status=status.HTTP_400_BAD_REQUEST)
+        TicketService.delete_attachment(attachment_id=pk, operator=request.user)
+        return Response({'detail': '已删除。'}, status=status.HTTP_200_OK)

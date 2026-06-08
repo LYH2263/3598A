@@ -141,23 +141,69 @@ function openCreateDialog() {
   createDialogVisible.value = true
 }
 
-function simulateImageUpload() {
-  const mockImages = [
-    'https://images.unsplash.com/photo-1558618666-fcd25c85cd64?w=400&h=300&fit=crop',
-    'https://images.unsplash.com/photo-1581094794329-c8112a89af12?w=400&h=300&fit=crop',
-    'https://images.unsplash.com/photo-1504328345606-18bbc8c9d7d1?w=400&h=300&fit=crop',
-  ]
-  const url = mockImages[Math.floor(Math.random() * mockImages.length)]
-  createForm.attachments.push({
-    file_name: `报修图片_${Date.now()}.jpg`,
-    file_url: url,
-    file_size: Math.floor(Math.random() * 500000) + 10000,
-    mime_type: 'image/jpeg',
-  })
-  ElNotification({ title: '已添加图片', message: '演示环境：已模拟上传图片附件。', type: 'success' })
+const fileInputRef = ref(null)
+const uploading = ref(false)
+const MAX_ATTACHMENTS = 5
+const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/jpg']
+const ALLOWED_EXT = ['.jpg', '.jpeg', '.png']
+const MAX_SIZE = 10 * 1024 * 1024
+
+function triggerFileSelect() {
+  if (createForm.attachments.length >= MAX_ATTACHMENTS) {
+    ElNotification({ title: '数量超限', message: `最多上传 ${MAX_ATTACHMENTS} 张图片。`, type: 'warning' })
+    return
+  }
+  fileInputRef.value?.click()
 }
 
-function removeAttachment(idx) {
+async function handleFileChange(e) {
+  const files = Array.from(e.target.files || [])
+  if (!files.length) return
+  for (const file of files) {
+    if (createForm.attachments.length >= MAX_ATTACHMENTS) {
+      ElNotification({ title: '数量超限', message: `最多上传 ${MAX_ATTACHMENTS} 张图片。`, type: 'warning' })
+      break
+    }
+    const ext = '.' + file.name.split('.').pop().toLowerCase()
+    if (!ALLOWED_TYPES.includes(file.type) && !ALLOWED_EXT.includes(ext)) {
+      ElNotification({ title: '格式不支持', message: `${file.name} 不是 JPG/PNG 图片。`, type: 'warning' })
+      continue
+    }
+    if (file.size > MAX_SIZE) {
+      ElNotification({ title: '文件过大', message: `${file.name} 超过 10MB 限制。`, type: 'warning' })
+      continue
+    }
+    await uploadFile(file)
+  }
+  if (fileInputRef.value) fileInputRef.value.value = ''
+}
+
+async function uploadFile(file) {
+  uploading.value = true
+  try {
+    const formData = new FormData()
+    formData.append('file', file)
+    const { data } = await http.post('/tickets/attachments/upload/', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+    createForm.attachments.push(data)
+    ElNotification({ title: '上传成功', message: `${file.name} 已添加。`, type: 'success' })
+  } catch (err) {
+    const msg = err?.response?.data?.detail || '上传失败，请重试。'
+    ElNotification({ title: '上传失败', message: msg, type: 'error' })
+  } finally {
+    uploading.value = false
+  }
+}
+
+async function removeAttachment(idx) {
+  const att = createForm.attachments[idx]
+  if (!att) return
+  if (att.id) {
+    try {
+      await http.delete(`/tickets/attachments/${att.id}/`)
+    } catch (_e) {}
+  }
   createForm.attachments.splice(idx, 1)
 }
 
@@ -187,7 +233,7 @@ async function submitCreate() {
       priority: createForm.priority,
       room_text: createForm.room_text.trim(),
       contact_phone: createForm.contact_phone.trim(),
-      attachments: createForm.attachments,
+      attachment_ids: createForm.attachments.map((a) => a.id).filter(Boolean),
     }
     if (createForm.room_id) payload.room_id = createForm.room_id
     const { data } = await http.post('/tickets/', payload)
@@ -382,16 +428,28 @@ onMounted(async () => {
         </el-form-item>
 
         <el-form-item label="图片附件">
+          <input
+            ref="fileInputRef"
+            type="file"
+            accept="image/jpeg,image/png,image/jpg"
+            multiple
+            style="display:none"
+            @change="handleFileChange"
+          />
           <div v-if="createForm.attachments.length" class="attachment-grid" style="margin-bottom:12px">
-            <div v-for="(att, idx) in createForm.attachments" :key="idx" class="attachment-item">
-              <img v-if="att.mime_type?.startsWith('image/')" :src="att.file_url" />
+            <div v-for="(att, idx) in createForm.attachments" :key="att.id || idx" class="attachment-item">
+              <img v-if="att.mime_type?.startsWith('image/')" :src="att.file_url" style="cursor:pointer" @click="window.open(att.file_url, '_blank')" />
               <div class="attachment-name" :title="att.file_name">{{ att.file_name }}</div>
               <div class="attachment-size">{{ formatBytes(att.file_size) }}</div>
               <el-button link type="danger" size="small" @click="removeAttachment(idx)">移除</el-button>
             </div>
           </div>
-          <el-button type="success" plain @click="simulateImageUpload">📷 上传图片（演示）</el-button>
-          <span style="margin-left:12px; font-size:12px; color:var(--text-sub)">支持 JPG/PNG，最多 5 张</span>
+          <el-button type="success" plain :loading="uploading" @click="triggerFileSelect">
+            📷 选择图片上传
+          </el-button>
+          <span style="margin-left:12px; font-size:12px; color:var(--text-sub)">
+            支持 JPG/PNG，最多 {{ MAX_ATTACHMENTS }} 张，单张不超过 10MB（{{ createForm.attachments.length }}/{{ MAX_ATTACHMENTS }}）
+          </span>
         </el-form-item>
       </el-form>
       <template #footer>

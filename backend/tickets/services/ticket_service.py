@@ -66,7 +66,7 @@ class TicketService:
         room=None,
         room_text: str = '',
         contact_phone: str = '',
-        attachments: list[dict] | None = None,
+        attachment_ids: list[int] | None = None,
     ) -> Ticket:
         ticket = Ticket.objects.create(
             title=title.strip(),
@@ -82,16 +82,12 @@ class TicketService:
         ticket.sla_deadline = cls._calculate_sla_deadline(ticket)
         ticket.save(update_fields=['sla_deadline'])
 
-        if attachments:
-            for att in attachments:
-                TicketAttachment.objects.create(
-                    ticket=ticket,
-                    uploaded_by=student,
-                    file_name=att.get('file_name', ''),
-                    file_url=att.get('file_url', ''),
-                    file_size=att.get('file_size', 0),
-                    mime_type=att.get('mime_type', ''),
-                )
+        if attachment_ids:
+            TicketAttachment.objects.filter(
+                id__in=attachment_ids,
+                uploaded_by=student,
+                ticket__isnull=True,
+            ).update(ticket=ticket)
 
         TicketReply.objects.create(
             ticket=ticket,
@@ -328,7 +324,7 @@ class TicketService:
         author: User,
         content: str,
         is_internal: bool = False,
-        attachments: list[dict] | None = None,
+        attachment_ids: list[int] | None = None,
     ) -> TicketReply:
         if ticket.status == Ticket.STATUS_CLOSED:
             raise ValueError('已关闭的工单不可回复')
@@ -341,17 +337,12 @@ class TicketService:
             action_type='reply',
         )
 
-        if attachments:
-            for att in attachments:
-                TicketAttachment.objects.create(
-                    ticket=ticket,
-                    reply=reply,
-                    uploaded_by=author,
-                    file_name=att.get('file_name', ''),
-                    file_url=att.get('file_url', ''),
-                    file_size=att.get('file_size', 0),
-                    mime_type=att.get('mime_type', ''),
-                )
+        if attachment_ids:
+            TicketAttachment.objects.filter(
+                id__in=attachment_ids,
+                uploaded_by=author,
+                reply__isnull=True,
+            ).update(ticket=ticket, reply=reply)
 
         if not is_internal:
             notify_ids = []
@@ -366,6 +357,46 @@ class TicketService:
                 })
 
         return reply
+
+    @classmethod
+    @transaction.atomic
+    def upload_attachment(
+        cls,
+        *,
+        uploaded_by: User,
+        file,
+        ticket_id: int | None = None,
+    ) -> TicketAttachment:
+        import os
+        ticket = Ticket.objects.filter(id=ticket_id).first() if ticket_id else None
+        att = TicketAttachment(
+            ticket=ticket,
+            uploaded_by=uploaded_by,
+            file=file,
+            file_name=os.path.basename(file.name) if hasattr(file, 'name') else 'attachment',
+            file_size=getattr(file, 'size', 0),
+            mime_type=getattr(file, 'content_type', ''),
+        )
+        att.save()
+        return att
+
+    @classmethod
+    @transaction.atomic
+    def delete_attachment(cls, *, attachment_id: int, operator: User) -> bool:
+        is_admin = getattr(operator.profile, 'role', None) == 'admin' if hasattr(operator, 'profile') else False
+        qs = TicketAttachment.objects.filter(id=attachment_id)
+        if not is_admin:
+            qs = qs.filter(uploaded_by=operator)
+        att = qs.first()
+        if not att:
+            return False
+        if att.file:
+            try:
+                att.file.delete(save=False)
+            except Exception:
+                logger.exception('Failed to delete file for attachment #%s', attachment_id)
+        att.delete()
+        return True
 
     @classmethod
     def check_and_escalate_sla(cls, ticket: Ticket) -> bool:

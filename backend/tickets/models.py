@@ -1,8 +1,18 @@
+import os
+import uuid
+
 from django.contrib.auth.models import User
 from django.db import models
 from django.utils import timezone
 
 from housing.models import Room
+
+
+def ticket_attachment_upload_path(instance, filename):
+    ticket_id = instance.ticket_id or 'pending'
+    ext = os.path.splitext(filename)[1].lower()
+    new_filename = f'{uuid.uuid4().hex}{ext}'
+    return f'tickets/ticket_{ticket_id}/{new_filename}'
 
 
 class Ticket(models.Model):
@@ -180,8 +190,11 @@ class TicketAttachment(models.Model):
     )
     uploaded_by = models.ForeignKey(User, on_delete=models.CASCADE, verbose_name='上传人')
 
+    file = models.FileField(
+        upload_to=ticket_attachment_upload_path,
+        verbose_name='附件文件',
+    )
     file_name = models.CharField(max_length=255, verbose_name='文件名')
-    file_url = models.URLField(max_length=512, verbose_name='文件URL')
     file_size = models.IntegerField(default=0, verbose_name='文件大小（字节）')
     mime_type = models.CharField(max_length=128, blank=True, default='', verbose_name='MIME类型')
 
@@ -195,6 +208,12 @@ class TicketAttachment(models.Model):
 
     def __str__(self) -> str:
         return self.file_name
+
+    @property
+    def file_url(self) -> str:
+        if self.file:
+            return self.file.url
+        return ''
 
 
 class TicketSLAConfig(models.Model):

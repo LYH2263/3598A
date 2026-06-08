@@ -3,6 +3,8 @@ from django.urls import path
 from tickets.views import (
     TicketAssignAPIView,
     TicketAssigneesAPIView,
+    TicketAttachmentDeleteAPIView,
+    TicketAttachmentUploadAPIView,
     TicketConstantsAPIView,
     TicketDetailAPIView,
     TicketListCreateAPIView,
@@ -25,6 +27,8 @@ urlpatterns = [
     path('assignees/', TicketAssigneesAPIView.as_view(), name='ticket-assignees'),
     path('sla-configs/', TicketSLAConfigListAPIView.as_view(), name='ticket-sla-configs'),
     path('sla-check/', TicketSLACheckAPIView.as_view(), name='ticket-sla-check'),
+    path('attachments/upload/', TicketAttachmentUploadAPIView.as_view(), name='ticket-attachment-upload'),
+    path('attachments/<int:pk>/', TicketAttachmentDeleteAPIView.as_view(), name='ticket-attachment-delete'),
     path('<int:pk>/', TicketDetailAPIView.as_view(), name='ticket-detail'),
     path('<int:pk>/assign/', TicketAssignAPIView.as_view(), name='ticket-assign'),
     path('<int:pk>/action/', TicketStatusActionAPIView.as_view(), name='ticket-action'),

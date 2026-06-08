@@ -38,6 +38,17 @@ const actionDialogVisible = ref(false)
 const currentAction = ref('')
 const actionRemark = ref('')
 
+const replyFileInputRef = ref(null)
+const replyUploading = ref(false)
+const REPLY_MAX_ATTACHMENTS = 5
+const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/jpg']
+const ALLOWED_EXT = ['.jpg', '.jpeg', '.png']
+const MAX_SIZE = 10 * 1024 * 1024
+
+const previewVisible = ref(false)
+const previewList = ref([])
+const previewIndex = ref(0)
+
 const statusMap = {
   pending: { label: '待派单', type: 'info', color: '#909399' },
   assigned: { label: '已派单', type: 'warning', color: '#e6a23c' },
@@ -230,7 +241,7 @@ async function submitReply() {
     await http.post(`/tickets/${ticketId.value}/reply/`, {
       content: replyForm.content,
       is_internal: replyForm.is_internal,
-      attachments: replyForm.attachments,
+      attachment_ids: replyForm.attachments.map((a) => a.id).filter(Boolean),
     })
     replyForm.content = ''
     replyForm.is_internal = false
@@ -240,23 +251,71 @@ async function submitReply() {
   } catch (_e) {}
 }
 
-function simulateImageUpload() {
-  const mockImages = [
-    'https://images.unsplash.com/photo-1558618666-fcd25c85cd64?w=400&h=300&fit=crop',
-    'https://images.unsplash.com/photo-1581094794329-c8112a89af12?w=400&h=300&fit=crop',
-  ]
-  const url = mockImages[Math.floor(Math.random() * mockImages.length)]
-  replyForm.attachments.push({
-    file_name: `image_${Date.now()}.jpg`,
-    file_url: url,
-    file_size: Math.floor(Math.random() * 500000) + 10000,
-    mime_type: 'image/jpeg',
-  })
-  ElNotification({ title: '已添加附件', message: '演示环境：已模拟添加图片附件。', type: 'success' })
+function triggerReplyFileSelect() {
+  if (replyForm.attachments.length >= REPLY_MAX_ATTACHMENTS) {
+    ElNotification({ title: '数量超限', message: `最多上传 ${REPLY_MAX_ATTACHMENTS} 张图片。`, type: 'warning' })
+    return
+  }
+  replyFileInputRef.value?.click()
 }
 
-function removeAttachment(idx) {
+async function handleReplyFileChange(e) {
+  const files = Array.from(e.target.files || [])
+  if (!files.length) return
+  for (const file of files) {
+    if (replyForm.attachments.length >= REPLY_MAX_ATTACHMENTS) {
+      ElNotification({ title: '数量超限', message: `最多上传 ${REPLY_MAX_ATTACHMENTS} 张图片。`, type: 'warning' })
+      break
+    }
+    const ext = '.' + file.name.split('.').pop().toLowerCase()
+    if (!ALLOWED_TYPES.includes(file.type) && !ALLOWED_EXT.includes(ext)) {
+      ElNotification({ title: '格式不支持', message: `${file.name} 不是 JPG/PNG 图片。`, type: 'warning' })
+      continue
+    }
+    if (file.size > MAX_SIZE) {
+      ElNotification({ title: '文件过大', message: `${file.name} 超过 10MB 限制。`, type: 'warning' })
+      continue
+    }
+    await uploadReplyFile(file)
+  }
+  if (replyFileInputRef.value) replyFileInputRef.value.value = ''
+}
+
+async function uploadReplyFile(file) {
+  replyUploading.value = true
+  try {
+    const formData = new FormData()
+    formData.append('file', file)
+    formData.append('ticket_id', String(ticketId.value))
+    const { data } = await http.post('/tickets/attachments/upload/', formData, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    })
+    replyForm.attachments.push(data)
+    ElNotification({ title: '上传成功', message: `${file.name} 已添加。`, type: 'success' })
+  } catch (err) {
+    const msg = err?.response?.data?.detail || '上传失败，请重试。'
+    ElNotification({ title: '上传失败', message: msg, type: 'error' })
+  } finally {
+    replyUploading.value = false
+  }
+}
+
+async function removeReplyAttachment(idx) {
+  const att = replyForm.attachments[idx]
+  if (!att) return
+  if (att.id) {
+    try {
+      await http.delete(`/tickets/attachments/${att.id}/`)
+    } catch (_e) {}
+  }
   replyForm.attachments.splice(idx, 1)
+}
+
+function openImagePreview(attachments, startIdx = 0) {
+  const imageList = attachments.filter((a) => a.mime_type?.startsWith('image/') || a.file_url?.match(/\.(jpg|jpeg|png)$/i))
+  previewList.value = imageList.map((a) => a.file_url)
+  previewIndex.value = Math.max(0, startIdx)
+  if (previewList.value.length) previewVisible.value = true
 }
 
 onMounted(async () => {
@@ -338,8 +397,17 @@ onMounted(async () => {
               <template v-if="ticket.attachments && ticket.attachments.length">
                 <el-divider content-position="left">附件 ({{ ticket.attachments.length }})</el-divider>
                 <div class="attachment-grid">
-                  <div v-for="att in ticket.attachments" :key="att.id" class="attachment-item">
-                    <img v-if="att.mime_type?.startsWith('image/')" :src="att.file_url" />
+                  <div
+                    v-for="(att, idx) in ticket.attachments"
+                    :key="att.id"
+                    class="attachment-item"
+                  >
+                    <img
+                      v-if="att.mime_type?.startsWith('image/')"
+                      :src="att.file_url"
+                      style="cursor:zoom-in"
+                      @click="openImagePreview(ticket.attachments, idx)"
+                    />
                     <div v-else class="attachment-icon">📎</div>
                     <div class="attachment-name" :title="att.file_name">{{ att.file_name }}</div>
                     <div class="attachment-size">{{ formatBytes(att.file_size) }}</div>
@@ -374,8 +442,13 @@ onMounted(async () => {
                     <p v-else style="margin:0; font-weight:500">{{ reply.content }}</p>
                   </div>
                   <div v-if="reply.attachments && reply.attachments.length" class="timeline-attachments">
-                    <div v-for="att in reply.attachments" :key="att.id" class="attachment-item small">
-                      <img v-if="att.mime_type?.startsWith('image/')" :src="att.file_url" />
+                    <div v-for="(att, aIdx) in reply.attachments" :key="att.id" class="attachment-item small">
+                      <img
+                        v-if="att.mime_type?.startsWith('image/')"
+                        :src="att.file_url"
+                        style="cursor:zoom-in"
+                        @click="openImagePreview(reply.attachments, aIdx)"
+                      />
                       <div v-else class="attachment-icon">📎</div>
                       <div class="attachment-name">{{ att.file_name }}</div>
                     </div>
@@ -387,6 +460,14 @@ onMounted(async () => {
             <el-card class="section-card" shadow="never" style="margin-top:16px" v-if="canReply">
               <h3 class="section-title" style="margin-top:0">回复</h3>
               <el-form label-position="top">
+                <input
+                  ref="replyFileInputRef"
+                  type="file"
+                  accept="image/jpeg,image/png,image/jpg"
+                  multiple
+                  style="display:none"
+                  @change="handleReplyFileChange"
+                />
                 <el-form-item>
                   <el-input
                     v-model="replyForm.content"
@@ -399,17 +480,27 @@ onMounted(async () => {
                 </el-form-item>
                 <div v-if="replyForm.attachments.length" style="margin-bottom: 12px">
                   <div class="attachment-grid">
-                    <div v-for="(att, idx) in replyForm.attachments" :key="idx" class="attachment-item">
-                      <img v-if="att.mime_type?.startsWith('image/')" :src="att.file_url" />
+                    <div v-for="(att, idx) in replyForm.attachments" :key="att.id || idx" class="attachment-item">
+                      <img
+                        v-if="att.mime_type?.startsWith('image/')"
+                        :src="att.file_url"
+                        style="cursor:zoom-in"
+                        @click="openImagePreview(replyForm.attachments, idx)"
+                      />
                       <div v-else class="attachment-icon">📎</div>
                       <div class="attachment-name">{{ att.file_name }}</div>
-                      <el-button link type="danger" size="small" @click="removeAttachment(idx)">移除</el-button>
+                      <el-button link type="danger" size="small" @click="removeReplyAttachment(idx)">移除</el-button>
                     </div>
                   </div>
                 </div>
                 <el-row justify="space-between" align="middle">
                   <el-col>
-                    <el-button type="success" plain @click="simulateImageUpload">📷 添加图片（演示）</el-button>
+                    <el-button type="success" plain :loading="replyUploading" @click="triggerReplyFileSelect">
+                      📷 选择图片上传
+                    </el-button>
+                    <span style="margin-left:8px; font-size:12px; color:var(--text-sub)">
+                      支持 JPG/PNG，最多 {{ REPLY_MAX_ATTACHMENTS }} 张（{{ replyForm.attachments.length }}/{{ REPLY_MAX_ATTACHMENTS }}）
+                    </span>
                     <el-checkbox v-if="isAdmin" v-model="replyForm.is_internal" style="margin-left: 12px">内部备注（学生不可见）</el-checkbox>
                   </el-col>
                   <el-col>
@@ -478,6 +569,13 @@ onMounted(async () => {
         <el-button type="primary" :disabled="!ratingForm.rating" @click="confirmRating">提交评价</el-button>
       </template>
     </el-dialog>
+
+    <el-image-viewer
+      v-if="previewVisible"
+      :url-list="previewList"
+      :initial-index="previewIndex"
+      @close="previewVisible = false"
+    />
   </main>
 </template>
 
